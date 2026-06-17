@@ -1,0 +1,3 @@
+source_a,market_id_a,source_b,market_id_b,relation
+kalshi,EXAMPLE_FORCE_A,manifold,EXAMPLE_FORCE_B,match
+kalshi,EXAMPLE_BLOCK_A,manifold,EXAMPLE_BLOCK_B,block

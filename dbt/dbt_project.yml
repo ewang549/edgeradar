@@ -1,0 +1,39 @@
+# dbt project for EdgeRadar.
+#
+# Reads the clean Parquet zone produced by ingestion (Phase 1) and builds a tested
+# warehouse in DuckDB: staging views per source -> a unified fact_market_quotes
+# table. dim_event (entity resolution) and the signal marts arrive in later phases.
+
+name: "edgeradar"
+version: "0.1.0"
+config-version: 2
+profile: "edgeradar"
+
+model-paths: ["models"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Glob for the clean lake, relative to the process working directory (/app in the
+  # container). Layout: data/clean/source=<s>/date=<d>/snapshot=<ts>.parquet
+  clean_glob: "data/clean/*/*/*.parquet"
+  # Entity-resolution output written by `edgeradar resolve` (Phase 4).
+  event_map_path: "data/marts/event_map.parquet"
+  # Weather-edge output written by `edgeradar weather` (Phase 5).
+  weather_edge_path: "data/marts/weather_edge.parquet"
+  # Evaluation outputs written by `edgeradar log-signals` / `evaluate` (Phase 6).
+  signal_log_path: "data/marts/signal_log.parquet"
+  signal_scores_path: "data/marts/signal_scores.parquet"
+  # Minimum net edge (after trading cost) for a divergence to count as a signal.
+  divergence_min_edge: 0.0
+
+models:
+  edgeradar:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

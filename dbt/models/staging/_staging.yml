@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: stg_manifold
+    description: >
+      Cleaned Manifold quotes from the clean Parquet zone. One row per
+      (market, outcome, snapshot). NaN probabilities are converted to NULL.
+    columns:
+      - name: quote_key
+        description: Surrogate natural key = md5(source|market_id|outcome|snapshot_ts).
+        data_tests: [unique, not_null]
+      - name: source
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["manifold"]
+      - name: outcome
+        data_tests: [not_null]
+      - name: snapshot_ts
+        data_tests: [not_null]
+
+  - name: stg_event_map
+    description: >
+      Entity-resolution output: each market mapped to its canonical event_id,
+      with the match method and confidence. Produced by `edgeradar resolve`.
+    columns:
+      - name: map_key
+        description: md5(source|market_id) — one row per market.
+        data_tests: [unique, not_null]
+      - name: source
+        data_tests: [not_null]
+      - name: market_id
+        data_tests: [not_null]
+      - name: event_id
+        data_tests: [not_null]
+
+  - name: stg_kalshi
+    description: >
+      Cleaned Kalshi quotes from the clean Parquet zone. implied_prob is the
+      YES bid/ask midpoint; NaN (illiquid) becomes NULL.
+    columns:
+      - name: quote_key
+        description: Surrogate natural key = md5(source|market_id|outcome|snapshot_ts).
+        data_tests: [unique, not_null]
+      - name: source
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["kalshi"]
+      - name: outcome
+        data_tests: [not_null]
+      - name: snapshot_ts
+        data_tests: [not_null]

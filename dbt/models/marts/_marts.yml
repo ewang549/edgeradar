@@ -1,0 +1,72 @@
+version: 2
+
+models:
+  - name: fact_market_quotes
+    description: >
+      Unified cross-platform market quotes at grain
+      (source, market_id, outcome, snapshot_ts). All sources land here in a
+      single schema; implied_prob is comparable across platforms, fee_adj_prob
+      is populated from Phase 5 onward.
+    columns:
+      - name: quote_key
+        description: Surrogate natural key. Uniqueness here proves idempotent ingestion.
+        data_tests: [unique, not_null]
+      - name: source
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["manifold", "kalshi"]
+      - name: market_id
+        data_tests: [not_null]
+      - name: outcome
+        data_tests: [not_null]
+      - name: price
+        data_tests: [not_null]
+      - name: snapshot_ts
+        data_tests: [not_null]
+    # Range checks on implied_prob / fee_adj_prob are enforced by the singular
+    # test tests/assert_probabilities_in_unit_interval.sql (NULLs allowed).
+
+  - name: dim_event
+    description: >
+      Canonical cross-platform event dimension built from entity resolution.
+      One row per event_id; n_sources > 1 marks events priced on multiple platforms.
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: n_markets
+        data_tests: [not_null]
+      - name: n_sources
+        data_tests: [not_null]
+
+  - name: fact_quotes_with_event
+    description: Quotes tagged with their resolved event_id (Phase 5 reads this).
+    columns:
+      - name: quote_key
+        data_tests: [unique, not_null]
+
+  - name: mart_divergence
+    description: >
+      Ranked, fee-aware cross-platform mispricing signals. One row per market in a
+      multi-platform event, with its deviation from leave-one-out consensus and the
+      net edge after trading cost. Review aid only — nothing is auto-traded.
+    columns:
+      - name: event_id
+        data_tests: [not_null]
+      - name: edge_net
+        data_tests: [not_null]
+      - name: is_signal
+        data_tests: [not_null]
+
+  - name: mart_weather_edge
+    description: >
+      NWS-forecast-implied probability vs Kalshi temperature-market price, with the
+      net edge after trading cost. Built from `edgeradar weather`. Review aid only.
+    columns:
+      - name: market_id
+        data_tests: [not_null]
+      - name: forecast_prob
+        data_tests: [not_null]
+      - name: edge_net
+        data_tests: [not_null]

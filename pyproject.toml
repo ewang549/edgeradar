@@ -1,0 +1,64 @@
+[project]
+name = "edgeradar"
+version = "0.0.1"
+description = "EdgeRadar — read-only cross-platform prediction-market mispricing engine (analytics + alerting only)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ethan Wang" }]
+
+# Phase 0 keeps the dependency set deliberately tiny. Each later phase adds
+# only what it needs (kafka client in Phase 3, dbt in Phase 2, etc.) so the
+# scaffold stays runnable end-to-end at every gate.
+dependencies = [
+    "pydantic>=2.7",          # typed settings + record models
+    "pydantic-settings>=2.3",  # load config from environment / .env
+    "httpx>=0.27",            # async-capable HTTP client for source adapters
+    "pandas>=2.2",            # tabular handling before/around Parquet
+    "pyarrow>=16.0",          # Parquet read/write
+    "duckdb>=1.0",            # local warehouse (swappable for Postgres later)
+    "python-dotenv>=1.0",     # convenience for CLI/local runs
+    "confluent-kafka>=2.5",   # Kafka/Redpanda producer + consumer (Phase 3)
+    "streamlit>=1.36",        # read-only dashboard (Phase 7)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",              # linter + formatter (one tool, fast)
+    "mypy>=1.10",             # static type checking
+    "dbt-duckdb>=1.8",        # dbt + DuckDB adapter (warehouse transforms, Phase 2)
+    "dagster>=1.8",           # asset-based orchestration (Phase 6)
+    "dagster-webserver>=1.8", # Dagster UI (`make dagster`)
+]
+
+[project.scripts]
+# Thin CLI entrypoint; subcommands get fleshed out in Phase 1.
+edgeradar = "edgeradar.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/edgeradar"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# A pragmatic, not-pedantic starting set.
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# UP017 rewrites `timezone.utc` -> `datetime.UTC` (3.11+ only). We keep
+# `timezone.utc` so the code also runs on 3.10 interpreters.
+ignore = ["UP017"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

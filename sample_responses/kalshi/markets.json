@@ -1,0 +1,71 @@
+{
+  "cursor": "SAMPLE_CURSOR_FOR_DRY_RUN",
+  "markets": [
+    {
+      "ticker": "KXHIGHNY-26JUN17-B82.5",
+      "event_ticker": "KXHIGHNY-26JUN17",
+      "market_type": "binary",
+      "title": "Will the high temperature in NYC on Jun 17 be above 82.5F?",
+      "yes_sub_title": "Above 82.5F",
+      "status": "active",
+      "yes_bid_dollars": "0.4500",
+      "yes_ask_dollars": "0.4800",
+      "no_bid_dollars": "0.5200",
+      "no_ask_dollars": "0.5500",
+      "last_price_dollars": "0.4600",
+      "response_price_units": "usd_cent",
+      "open_time": "2026-06-17T08:00:00Z",
+      "close_time": "2026-06-17T23:59:00Z",
+      "volume_fp": "12000.00",
+      "volume_24h_fp": "3400.00",
+      "open_interest_fp": "8000.00",
+      "liquidity_dollars": "1500.0000",
+      "result": ""
+    },
+    {
+      "ticker": "KXNBAGAME-26JUN17BOSLAL-BOS",
+      "event_ticker": "KXNBAGAME-26JUN17BOSLAL",
+      "market_type": "binary",
+      "title": "Will the Boston Celtics beat the Los Angeles Lakers on Jun 17?",
+      "yes_sub_title": "Boston",
+      "status": "active",
+      "yes_bid_dollars": "0.9000",
+      "yes_ask_dollars": "0.9200",
+      "no_bid_dollars": "0.0800",
+      "no_ask_dollars": "0.1000",
+      "last_price_dollars": "0.9100",
+      "response_price_units": "usd_cent",
+      "open_time": "2026-06-17T12:00:00Z",
+      "close_time": "2026-06-18T03:30:00Z",
+      "volume_fp": "54000.00",
+      "volume_24h_fp": "21000.00",
+      "open_interest_fp": "30000.00",
+      "liquidity_dollars": "9000.0000",
+      "result": ""
+    },
+    {
+      "ticker": "KXSETTLED-26JUN16-EXAMPLE",
+      "event_ticker": "KXSETTLED-26JUN16",
+      "market_type": "binary",
+      "title": "Settled market example (status != active — should be filtered out)",
+      "status": "settled",
+      "yes_bid_dollars": "1.0000",
+      "yes_ask_dollars": "1.0000",
+      "last_price_dollars": "1.0000",
+      "close_time": "2026-06-16T23:59:00Z",
+      "result": "yes"
+    },
+    {
+      "ticker": "KXILLIQUID-26JUN17-EXAMPLE",
+      "event_ticker": "KXILLIQUID-26JUN17",
+      "market_type": "binary",
+      "title": "Illiquid market with no quotes (mid undefined -> implied_prob null, still recorded)",
+      "status": "active",
+      "yes_bid_dollars": "0.0000",
+      "yes_ask_dollars": "0.0000",
+      "last_price_dollars": "0.0000",
+      "close_time": "2026-06-17T23:59:00Z",
+      "result": ""
+    }
+  ]
+}

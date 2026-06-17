@@ -1,0 +1,13 @@
+# dbt connection profile. We keep it inside the project and point dbt at it with
+# --profiles-dir dbt, so there's nothing to configure in your home directory.
+#
+# DuckDB is an embedded, file-based warehouse: `path` is just a file on disk
+# (under the mounted data/ volume), so the warehouse persists between runs.
+
+edgeradar:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', 'data/warehouse/edgeradar.duckdb') }}"
+      threads: 4

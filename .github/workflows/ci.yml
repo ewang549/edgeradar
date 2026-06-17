@@ -1,0 +1,48 @@
+name: CI
+
+# Lint + tests + a full dbt build on the committed sample dataset. Everything runs
+# offline: the dataset is regenerated from the committed sample_responses fixtures
+# via the adapters' --dry-run mode, so CI needs no live APIs, Docker, or services.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Lint (ruff)
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Unit tests (pytest)
+        run: uv run pytest -q
+
+      - name: Generate sample dataset (offline, dry-run)
+        run: |
+          mkdir -p data/warehouse
+          uv run edgeradar ingest --source all --dry-run
+          uv run edgeradar resolve
+          uv run edgeradar weather --dry-run
+
+      - name: dbt build — core models + tests
+        run: uv run dbt build --exclude tag:eval --project-dir dbt --profiles-dir dbt
+
+      - name: Evaluate + dbt build — eval models + tests
+        run: |
+          uv run edgeradar evaluate
+          uv run dbt build --select tag:eval --project-dir dbt --profiles-dir dbt

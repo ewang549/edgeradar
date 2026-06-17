@@ -1,0 +1,4 @@
+# Local data lake lives here (git-ignored). Subfolders created at runtime:
+#   data/raw/<source>/date=YYYY-MM-DD/   raw JSON-derived Parquet
+#   data/clean/<source>/date=YYYY-MM-DD/ normalized MarketQuote Parquet
+#   data/warehouse/edgeradar.duckdb      DuckDB file

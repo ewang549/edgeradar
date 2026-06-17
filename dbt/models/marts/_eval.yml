@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: stg_signal_log
+    description: Append-only log of fired signals with prices at signal time (Phase 6, eval).
+    columns:
+      - name: signal_key
+        data_tests: [unique, not_null]
+
+  - name: mart_signal_scores
+    description: Resolved signals scored vs outcome — hit + net PnL (Phase 6, eval).
+    columns:
+      - name: signal_key
+        data_tests: [not_null]
+      - name: hit
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+
+  - name: mart_calibration
+    description: Predicted-probability bucket vs realized hit rate (Phase 6, eval).
+    columns:
+      - name: prob_bucket
+        data_tests: [not_null]

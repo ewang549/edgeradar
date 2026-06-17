@@ -1,0 +1,42 @@
+# Secrets — NEVER commit these
+.env
+*.pem
+*.key
+secrets/
+
+# Local data lake + warehouse (regenerable). Keep the folder, not the contents.
+data/*
+!data/.gitkeep
+*.duckdb
+*.duckdb.wal
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.eggs/
+*.egg-info/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# dbt (Phase 2)
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+
+# Dagster (Phase 6)
+.dagster/
+dagster_home/
+*.dagster
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

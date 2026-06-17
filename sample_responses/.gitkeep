@@ -1,0 +1,3 @@
+# Saved sample API responses for each adapter's --dry-run mode (Phase 1+).
+# Layout: sample_responses/<source>/*.json  (these ARE committed, so CI + offline
+# dev work without spending API quota).
