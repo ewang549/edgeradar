@@ -122,6 +122,19 @@ def read_quotes(*, source: str | None = None, data_root: str | None = None) -> p
     frames = [f for f in frames if not f.empty]
     if not frames:
         return pd.DataFrame()
+    # Coerce timestamp columns to pandas-bounded nanosecond datetimes BEFORE concat.
+    # Some platforms use far-future "never closes" dates (e.g. year 5555) that
+    # overflow pandas' datetime64[ns] range (~1678..2262) and would raise
+    # OutOfBoundsDatetime during the concat's dtype alignment. We clamp anything
+    # out of range to NaT and normalize resolution to ns.
+    ts_min = pd.Timestamp("1678-01-01", tz="UTC")
+    ts_max = pd.Timestamp("2261-12-31", tz="UTC")
+    for f in frames:
+        for col in ("snapshot_ts", "close_ts", "valid_from"):
+            if col in f.columns:
+                s = pd.to_datetime(f[col], errors="coerce", utc=True)
+                s = s.where((s >= ts_min) & (s <= ts_max))
+                f[col] = s.astype("datetime64[ns, UTC]")
     # Some per-source files have all-NA columns (e.g. Manifold has no `spread`),
     # which triggers a pandas concat FutureWarning about dtype inference. The
     # behavior is fine for us (we want the union of columns), so silence it.

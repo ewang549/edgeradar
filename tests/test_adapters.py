@@ -26,6 +26,16 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(socket, "socket", _boom)
 
 
+def test_far_future_dates_are_clamped():
+    # Manifold/Polymarket sometimes use far-future "never closes" sentinels that
+    # overflow pandas' datetime range; the helpers must clamp them to None.
+    from edgeradar.adapters._util import ms_to_dt, parse_iso
+
+    assert ms_to_dt(113_188_300_800_000) is None  # ~year 5555 in ms
+    assert parse_iso("5555-12-31T23:59:00Z") is None
+    assert parse_iso("2026-06-17T12:00:00Z") is not None  # normal dates still parse
+
+
 def test_manifold_normalizes_binary_and_filters_rest():
     adapter = ManifoldAdapter(dry_run=True)
     quotes = adapter.run()
