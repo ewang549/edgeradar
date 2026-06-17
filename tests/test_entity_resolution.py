@@ -77,3 +77,42 @@ def test_confidence_in_unit_interval(landed):
     res = resolve(data_root=landed, write=False)
     conf = res.event_map["match_confidence"].dropna()
     assert ((conf >= 0) & (conf <= 1)).all()
+
+
+def test_different_temperature_thresholds_not_merged(tmp_path, monkeypatch):
+    # Regression: near-identical titles that differ only in the threshold number
+    # (e.g. a ladder of Houston temperature buckets) must NOT collapse into one event.
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from edgeradar.models import MarketQuote
+    from edgeradar.storage import write_quotes_grouped
+
+    ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    quotes = [
+        MarketQuote(
+            source="kalshi",
+            market_id="H96",
+            outcome="YES",
+            title="Will the highest temperature in Houston be 96F or higher on June 17?",
+            price=Decimal("0.46"),
+            implied_prob=0.46,
+            fee_adj_prob=0.46,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="polymarket",
+            market_id="H97",
+            outcome="YES",
+            title="Will the highest temperature in Houston be 97F or higher on June 17?",
+            price=Decimal("0.30"),
+            implied_prob=0.30,
+            fee_adj_prob=0.30,
+            snapshot_ts=ts,
+        ),
+    ]
+    write_quotes_grouped(quotes, data_root=str(tmp_path))
+    res = resolve(data_root=str(tmp_path), write=False)
+    ev = res.event_map.set_index("market_id")["event_id"]
+    assert ev["H96"] != ev["H97"]  # different thresholds -> different events
+    assert res.n_cross_platform == 0

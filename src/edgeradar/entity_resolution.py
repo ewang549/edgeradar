@@ -154,6 +154,20 @@ def tokenize(title: str) -> set[str]:
     return {tok for tok in normalize_title(title).split() if tok and tok not in STOPWORDS}
 
 
+_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def numbers_in(title: str) -> frozenset[str]:
+    """Distinguishing numbers in a title (thresholds, lines, strike values).
+
+    Markets that differ in these numbers are NOT the same event — e.g. the
+    temperature buckets "96F or higher" vs "97F or higher", or "wins by over 1.5"
+    vs "over 2.5". Requiring the number sets to match prevents the fuzzy matcher
+    from collapsing a whole ladder of near-identical-title markets into one event.
+    """
+    return frozenset(_NUM_RE.findall(title.lower()))
+
+
 def guess_category(title: str) -> str:
     toks = set(normalize_title(title).split())
     for category, keywords in CATEGORY_KEYWORDS.items():
@@ -245,6 +259,7 @@ def load_latest_markets(*, data_root: str | None = None) -> pd.DataFrame:
     df = df[df["title"].astype(str).str.len() > 0].copy()
     df["category"] = df["title"].map(guess_category)
     df["tokens"] = df["title"].map(tokenize)
+    df["numbers"] = df["title"].map(numbers_in)
     df["close_ts"] = pd.to_datetime(df["close_ts"], utc=True, errors="coerce")
     return df
 
@@ -303,7 +318,10 @@ def resolve(
                 bonus = _date_bonus(a["close_ts"], b["close_ts"])
                 confidence = min(1.0, sim + bonus)
                 method = "fuzzy"
-                decision = "match" if confidence >= threshold else "no-match"
+                # Distinct thresholds/lines (different numbers) => different events,
+                # even if the titles are otherwise near-identical.
+                nums_match = a["numbers"] == b["numbers"]
+                decision = "match" if (confidence >= threshold and nums_match) else "no-match"
 
                 if ordered in block_set:
                     decision, method, overrides_applied = (
