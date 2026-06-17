@@ -168,6 +168,27 @@ def numbers_in(title: str) -> frozenset[str]:
     return frozenset(_NUM_RE.findall(title.lower()))
 
 
+# Words that separate the asserted winner (the YES subject) from the opponent.
+_WIN_WORDS = {"beat", "beats", "defeat", "defeats", "win", "wins"}
+
+
+def subject_tokens(title: str) -> frozenset[str] | None:
+    """The team/side the YES is betting on, for "who wins" markets.
+
+    "Boston Celtics beat the Los Angeles Lakers" -> {boston, celtics};
+    "Los Angeles Lakers to win vs Boston Celtics" -> {los, angeles, lakers}.
+    Used to keep OPPOSITE sides of the same game (which have near-identical titles
+    but are complementary probabilities) from being merged into one event.
+    Returns None when the title isn't a "who wins" market (no extra constraint).
+    """
+    words = normalize_title(title).split()
+    idx = next((i for i, w in enumerate(words) if w in _WIN_WORDS), None)
+    if idx is None:
+        return None
+    subj = frozenset(w for w in words[:idx] if w not in STOPWORDS)
+    return subj or None
+
+
 def guess_category(title: str) -> str:
     toks = set(normalize_title(title).split())
     for category, keywords in CATEGORY_KEYWORDS.items():
@@ -260,6 +281,7 @@ def load_latest_markets(*, data_root: str | None = None) -> pd.DataFrame:
     df["category"] = df["title"].map(guess_category)
     df["tokens"] = df["title"].map(tokenize)
     df["numbers"] = df["title"].map(numbers_in)
+    df["subject"] = df["title"].map(subject_tokens)
     df["close_ts"] = pd.to_datetime(df["close_ts"], utc=True, errors="coerce")
     return df
 
@@ -325,7 +347,14 @@ def resolve(
                 # without a date) so legitimate cross-platform pairs aren't over-blocked.
                 na, nb = a["numbers"], b["numbers"]
                 nums_ok = (not na) or (not nb) or (na == nb)
-                decision = "match" if (confidence >= threshold and nums_ok) else "no-match"
+                # Opposite sides of the same game ("Celtics win" vs "Lakers win")
+                # have near-identical titles but complementary probabilities — never
+                # merge them. Require the asserted winner (subject) to overlap.
+                sa, sb = a["subject"], b["subject"]
+                subject_ok = (sa is None) or (sb is None) or bool(sa & sb)
+                decision = (
+                    "match" if (confidence >= threshold and nums_ok and subject_ok) else "no-match"
+                )
 
                 if ordered in block_set:
                     decision, method, overrides_applied = (

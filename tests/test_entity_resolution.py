@@ -152,3 +152,53 @@ def test_different_temperature_thresholds_not_merged(tmp_path, monkeypatch):
     ev = res.event_map.set_index("market_id")["event_id"]
     assert ev["H96"] != ev["H97"]  # different thresholds -> different events
     assert res.n_cross_platform == 0
+
+
+def test_opposite_game_sides_not_merged(tmp_path, monkeypatch):
+    # Regression: "Celtics win" and "Lakers win" are complementary, not the same
+    # event — they must not merge (their probabilities would be averaged otherwise).
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from edgeradar.models import MarketQuote
+    from edgeradar.storage import write_quotes_grouped
+
+    ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    quotes = [
+        MarketQuote(
+            source="kalshi",
+            market_id="CELT",
+            outcome="YES",
+            title="Will the Boston Celtics beat the Los Angeles Lakers?",
+            price=Decimal("0.88"),
+            implied_prob=0.88,
+            fee_adj_prob=0.88,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="oddsapi",
+            market_id="CELT2",
+            outcome="YES",
+            title="Boston Celtics to win vs Los Angeles Lakers (NBA)",
+            price=Decimal("0.86"),
+            implied_prob=0.86,
+            fee_adj_prob=0.86,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="oddsapi",
+            market_id="LAL",
+            outcome="YES",
+            title="Los Angeles Lakers to win vs Boston Celtics (NBA)",
+            price=Decimal("0.14"),
+            implied_prob=0.14,
+            fee_adj_prob=0.14,
+            snapshot_ts=ts,
+        ),
+    ]
+    write_quotes_grouped(quotes, data_root=str(tmp_path))
+    ev = resolve(data_root=str(tmp_path), write=False).event_map.set_index("market_id")["event_id"]
+    # Both "Celtics win" markets group together...
+    assert ev["CELT"] == ev["CELT2"]
+    # ...but the "Lakers win" market is a separate event.
+    assert ev["LAL"] != ev["CELT"]
