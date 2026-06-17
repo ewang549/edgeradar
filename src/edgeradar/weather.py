@@ -98,7 +98,7 @@ def _match_location(title: str) -> str | None:
     return None
 
 
-def fetch_forecasts(location: str, *, dry_run: bool = False) -> list[Forecast]:
+def fetch_forecasts(location: str, *, dry_run: bool = False, sigma: float = 4.0) -> list[Forecast]:
     """Daytime-high forecasts for a configured location (offline in dry-run)."""
     cfg = LOCATIONS[location]
     if dry_run:
@@ -135,7 +135,7 @@ def fetch_forecasts(location: str, *, dry_run: bool = False) -> list[Forecast]:
                 location=location,
                 date=date,
                 high_f=float(period["temperature"]),
-                sigma=cfg["sigma"],
+                sigma=sigma,
             )
         )
     return out
@@ -148,6 +148,7 @@ def build_weather_edge(*, data_root: str | None = None, dry_run: bool = False) -
     """
     settings = get_settings()
     root = data_root or settings.data_root
+    sigma = sigma_for(root)
 
     quotes = read_quotes(source="kalshi", data_root=root)
     rows: list[dict] = []
@@ -168,7 +169,7 @@ def build_weather_edge(*, data_root: str | None = None, dry_run: bool = False) -
 
             if location not in forecast_cache:
                 forecast_cache[location] = {
-                    f.date: f for f in fetch_forecasts(location, dry_run=dry_run)
+                    f.date: f for f in fetch_forecasts(location, dry_run=dry_run, sigma=sigma)
                 }
             by_date = forecast_cache[location]
             if not by_date:
@@ -232,3 +233,97 @@ def build_weather_edge(*, data_root: str | None = None, dry_run: bool = False) -
         )
     df.to_parquet(out_path, index=False)
     return df
+
+
+# --- sigma calibration -------------------------------------------------------
+# The Normal model needs a day-ahead forecast-uncertainty sigma. We start from a
+# prior (config `weather_sigma_f`, default 4F) and refine it from resolved outcomes:
+# given many (forecast_high, threshold, did-it-happen) records, pick the sigma that
+# best explains the outcomes (maximum likelihood). The fitted value is written to
+# data/marts/weather_sigma.json and picked up by future runs.
+
+_SIGMA_FILE = "weather_sigma.json"
+_MIN_CALIBRATION_SAMPLES = 15
+
+
+def sigma_for(data_root: str | None = None) -> float:
+    """Return the calibrated sigma if one has been fitted, else the configured prior."""
+    settings = get_settings()
+    root = data_root or settings.data_root
+    path = Path(root) / "marts" / _SIGMA_FILE
+    if path.exists():
+        try:
+            return float(json.loads(path.read_text())["sigma"])
+        except (ValueError, KeyError, OSError):
+            pass
+    return settings.weather_sigma_f
+
+
+def fit_sigma_mle(margins: list[float], outcomes: list[int]) -> float:
+    """Maximum-likelihood sigma for P(yes) = Phi(margin / sigma) given binary outcomes.
+
+    `margin` is (forecast_high - threshold) oriented so positive favors "yes".
+    Coarse-then-fine 1-D search; no SciPy dependency.
+    """
+    eps = 1e-6
+
+    def neg_log_likelihood(sigma: float) -> float:
+        total = 0.0
+        for m, y in zip(margins, outcomes, strict=True):
+            p = min(max(normal_cdf(m / sigma), eps), 1 - eps)
+            total -= y * math.log(p) + (1 - y) * math.log(1 - p)
+        return total
+
+    best, best_nll = 4.0, float("inf")
+    # coarse grid then refine around the best point
+    grid = [0.5 + 0.25 * i for i in range(0, 78)]  # 0.5 .. ~20
+    for s in grid:
+        nll = neg_log_likelihood(s)
+        if nll < best_nll:
+            best, best_nll = s, nll
+    fine = [best - 0.25 + 0.02 * i for i in range(0, 26) if best - 0.25 + 0.02 * i > 0]
+    for s in fine:
+        nll = neg_log_likelihood(s)
+        if nll < best_nll:
+            best, best_nll = s, nll
+    return round(best, 3)
+
+
+def calibrate_weather_sigma(
+    *, data_root: str | None = None, resolutions_path: str = "seeds/resolutions.csv"
+) -> tuple[float, int, bool]:
+    """Fit sigma from resolved temperature markets and persist it. Returns (sigma, n, written).
+
+    Joins weather_edge (forecast_high_f, threshold_f, direction) to known outcomes.
+    Needs at least a handful of resolved markets; otherwise keeps the current prior.
+    """
+    settings = get_settings()
+    root = data_root or settings.data_root
+    edge_path = Path(root) / "marts" / "weather_edge.parquet"
+    res_path = Path(resolutions_path)
+    if not edge_path.exists() or not res_path.exists():
+        return sigma_for(root), 0, False
+
+    edge = pd.read_parquet(edge_path)
+    res = pd.read_csv(res_path)[["market_id", "outcome"]].dropna()
+    res["outcome"] = res["outcome"].astype(int)
+    joined = edge.merge(res, on="market_id", how="inner")
+    if joined.empty:
+        return sigma_for(root), 0, False
+
+    margins, outcomes = [], []
+    for _, r in joined.iterrows():
+        high, thr = float(r["forecast_high_f"]), float(r["threshold_f"])
+        margin = (high - thr) if r["direction"] == "above" else (thr - high)
+        margins.append(margin)
+        outcomes.append(int(r["outcome"]))
+
+    n = len(margins)
+    if n < _MIN_CALIBRATION_SAMPLES:
+        return sigma_for(root), n, False  # not enough data yet — keep the prior
+
+    sigma = fit_sigma_mle(margins, outcomes)
+    out_dir = Path(root) / "marts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / _SIGMA_FILE).write_text(json.dumps({"sigma": sigma, "n": n}))
+    return sigma, n, True

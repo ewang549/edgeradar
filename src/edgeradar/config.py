@@ -64,10 +64,19 @@ class Settings(BaseSettings):
 
     odds_api_base: str = Field(default="https://api.the-odds-api.com/v4")
     odds_api_key: str = Field(default="")  # free tier ~500 req/mo — cache hard
+    odds_api_regions: str = Field(default="us")
+    # Comma-separated sport keys to pull (one API call each — keep the list short to
+    # respect the free-tier quota). https://the-odds-api.com/sports-odds-data/sports-apis.html
+    odds_api_sports: str = Field(
+        default="basketball_nba,baseball_mlb,americanfootball_nfl,icehockey_nhl,soccer_epl"
+    )
 
     nws_api_base: str = Field(default="https://api.weather.gov")
     # NWS requires a descriptive User-Agent with contact info per their docs.
     nws_user_agent: str = Field(default="EdgeRadar (contact: set-me@example.com)")
+    # Day-ahead forecast-high uncertainty (deg F) for the Normal model. Default is a
+    # reasonable prior; `edgeradar calibrate-sigma` fits it from resolved outcomes.
+    weather_sigma_f: float = Field(default=4.0)
 
     # --- Alerting (Phase 7) ------------------------------------------------
     discord_webhook_url: str = Field(default="")

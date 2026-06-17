@@ -319,9 +319,13 @@ def resolve(
                 confidence = min(1.0, sim + bonus)
                 method = "fuzzy"
                 # Distinct thresholds/lines (different numbers) => different events,
-                # even if the titles are otherwise near-identical.
-                nums_match = a["numbers"] == b["numbers"]
-                decision = "match" if (confidence >= threshold and nums_match) else "no-match"
+                # even if the titles are otherwise near-identical. Only block when BOTH
+                # titles carry numbers and they differ (so a 96F vs 97F ladder is split),
+                # but allow matches when one side has no number (e.g. a sportsbook title
+                # without a date) so legitimate cross-platform pairs aren't over-blocked.
+                na, nb = a["numbers"], b["numbers"]
+                nums_ok = (not na) or (not nb) or (na == nb)
+                decision = "match" if (confidence >= threshold and nums_ok) else "no-match"
 
                 if ordered in block_set:
                     decision, method, overrides_applied = (

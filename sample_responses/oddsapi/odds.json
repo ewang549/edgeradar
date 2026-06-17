@@ -1,0 +1,61 @@
+[
+  {
+    "id": "e_nba_1",
+    "sport_key": "basketball_nba",
+    "sport_title": "NBA",
+    "commence_time": "2026-06-17T23:30:00Z",
+    "home_team": "Los Angeles Lakers",
+    "away_team": "Boston Celtics",
+    "bookmakers": [
+      {
+        "key": "draftkings",
+        "title": "DraftKings",
+        "markets": [
+          {
+            "key": "h2h",
+            "outcomes": [
+              {"name": "Boston Celtics", "price": 1.11},
+              {"name": "Los Angeles Lakers", "price": 7.5}
+            ]
+          }
+        ]
+      },
+      {
+        "key": "fanduel",
+        "title": "FanDuel",
+        "markets": [
+          {
+            "key": "h2h",
+            "outcomes": [
+              {"name": "Boston Celtics", "price": 1.10},
+              {"name": "Los Angeles Lakers", "price": 8.0}
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "e_mlb_1",
+    "sport_key": "baseball_mlb",
+    "sport_title": "MLB",
+    "commence_time": "2026-06-17T17:05:00Z",
+    "home_team": "Boston Red Sox",
+    "away_team": "New York Yankees",
+    "bookmakers": [
+      {
+        "key": "draftkings",
+        "title": "DraftKings",
+        "markets": [
+          {
+            "key": "h2h",
+            "outcomes": [
+              {"name": "New York Yankees", "price": 1.80},
+              {"name": "Boston Red Sox", "price": 2.10}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

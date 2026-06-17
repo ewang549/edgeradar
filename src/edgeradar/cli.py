@@ -113,6 +113,20 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_calibrate_sigma(_: argparse.Namespace) -> int:
+    from edgeradar.weather import calibrate_weather_sigma
+
+    sigma, n, written = calibrate_weather_sigma()
+    if written:
+        print(f"[calibrate-sigma] fitted sigma={sigma} from {n} resolved market(s); saved.")
+    else:
+        print(
+            f"[calibrate-sigma] kept prior sigma={sigma} "
+            f"({n} resolved market(s) — need more before refitting)."
+        )
+    return 0
+
+
 def _cmd_weather(args: argparse.Namespace) -> int:
     from edgeradar.weather import build_weather_edge
 
@@ -214,6 +228,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_weather.add_argument("--dry-run", action="store_true", help="Use saved sample forecast.")
     p_weather.set_defaults(func=_cmd_weather)
+
+    sub.add_parser(
+        "calibrate-sigma", help="Fit the weather forecast sigma from resolved outcomes (Phase 5+)."
+    ).set_defaults(func=_cmd_calibrate_sigma)
 
     sub.add_parser(
         "log-signals", help="Append currently-flagged signals to the signal_log (Phase 6)."

@@ -16,7 +16,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ["manifold", "kalshi", "polymarket"]
+                values: ["manifold", "kalshi", "polymarket", "oddsapi"]
       - name: market_id
         data_tests: [not_null]
       - name: outcome

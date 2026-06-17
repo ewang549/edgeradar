@@ -65,3 +65,37 @@ The honest expected outcome, consistent with prediction markets being largely
 efficient: most divergence signals are fee-dominated noise, and the realistic prize is
 a strong data-engineering portfolio project plus, at most, small edges in the corners
 (like well-modeled weather) — not riches.
+
+## Data-quality gotchas found on live data
+
+Running EdgeRadar against real APIs (rather than the tidy sample fixtures) surfaced
+four bugs that the demo data never would have. Each followed the same tell: a
+suspiciously large "edge" was a defect in our own pipeline, not free money. All four
+were fixed and now have regression tests; every external call was also made
+fail-soft so one bad input can't crash the daily run.
+
+1. **Stale NWS grid id (404).** The weather module hardcoded an NWS gridpoint
+   (`OKX/33,35`) that returned 404 on live data — those grid ids aren't stable.
+   *Fix:* resolve the forecast URL at runtime from lat/long via `/points/{lat},{lon}`,
+   and skip (don't crash) on any NWS error.
+
+2. **Sports markets parsed as temperature.** The weather detector matched any title
+   containing "new york" + "over `<number>`", so "New York Mets win by over 1.5 runs"
+   was read as a 1.5°F threshold and produced fake ~0.9 edges. *Fix:* the threshold
+   number must be followed by a temperature unit (°/F/degrees) **and** the title must
+   contain a temperature keyword.
+
+3. **Out-of-bounds datetime (year 5555).** Some markets use a far-future "never
+   closes" sentinel date that overflows pandas' datetime64[ns] range (~1678–2262),
+   crashing the Parquet reader during concat. *Fix:* clamp out-of-range timestamps to
+   "unknown" at ingestion, and coerce/clamp on read so existing bad files are tolerated.
+
+4. **Entity-resolution over-merging.** A ladder of near-identical titles ("Houston
+   96°F or higher", "97°F or higher", …) collapsed into one event because the titles
+   are ~95% similar, producing spurious cross-platform divergences across *different
+   thresholds*. *Fix:* require the set of numbers in two titles to match before a
+   fuzzy pair can group (manual overrides still win).
+
+The meta-lesson: demo data tests the happy path; live data tests your assumptions.
+The value of the evaluation layer and these guards is that the system fails *loudly
+in tests* and *softly in production*, rather than silently emitting garbage signals.

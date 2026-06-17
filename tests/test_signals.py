@@ -45,6 +45,24 @@ def test_parse_threshold():
     assert parse_threshold("yes Over 4.5 goals scored") is None
 
 
+def test_fit_sigma_mle_recovers_synthetic():
+    # Generate deterministic outcomes from a known sigma and check we recover it.
+    import random
+
+    from edgeradar.weather import fit_sigma_mle
+
+    rng = random.Random(0)
+    true_sigma = 5.0
+    margins, outcomes = [], []
+    for _ in range(4000):
+        m = rng.uniform(-15, 15)
+        p = normal_cdf(m / true_sigma)
+        margins.append(m)
+        outcomes.append(1 if rng.random() < p else 0)
+    fitted = fit_sigma_mle(margins, outcomes)
+    assert abs(fitted - true_sigma) < 1.0  # recovered close to the true sigma
+
+
 def test_is_temperature_market_rejects_sports():
     from edgeradar.weather import is_temperature_market
 

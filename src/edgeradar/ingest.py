@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from edgeradar.adapters.base import SourceAdapter
 from edgeradar.adapters.kalshi import KalshiAdapter
 from edgeradar.adapters.manifold import ManifoldAdapter
+from edgeradar.adapters.oddsapi import OddsApiAdapter
 from edgeradar.adapters.polymarket import PolymarketAdapter
 from edgeradar.storage import write_quotes, write_raw
 
@@ -18,6 +19,7 @@ REGISTRY: dict[str, type[SourceAdapter]] = {
     "manifold": ManifoldAdapter,
     "kalshi": KalshiAdapter,
     "polymarket": PolymarketAdapter,
+    "oddsapi": OddsApiAdapter,
 }
 
 

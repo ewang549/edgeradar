@@ -13,3 +13,5 @@ union all
 select * from {{ ref("stg_kalshi") }}
 union all
 select * from {{ ref("stg_polymarket") }}
+union all
+select * from {{ ref("stg_oddsapi") }}

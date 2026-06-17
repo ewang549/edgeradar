@@ -59,16 +59,52 @@ def test_known_cross_platform_pairs_are_grouped(landed):
     assert nba["event_id"].iloc[0] != wx["event_id"].iloc[0]
 
 
-def test_block_override_separates_a_pair(landed, tmp_path, monkeypatch):
-    # Force the NBA pair apart via a manual block override.
+def test_block_override_separates_a_pair(tmp_path, monkeypatch):
+    # Isolated two-market lake so no third source can transitively bridge them.
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from edgeradar.config import get_settings
+    from edgeradar.models import MarketQuote
+    from edgeradar.storage import write_quotes_grouped
+
+    get_settings.cache_clear()
+    ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    quotes = [
+        MarketQuote(
+            source="manifold",
+            market_id="NBA_A",
+            outcome="YES",
+            title="Will the Boston Celtics beat the Los Angeles Lakers on June 17?",
+            price=Decimal("0.88"),
+            implied_prob=0.88,
+            fee_adj_prob=0.88,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="kalshi",
+            market_id="NBA_B",
+            outcome="YES",
+            title="Will the Boston Celtics beat the Los Angeles Lakers on Jun 17?",
+            price=Decimal("0.91"),
+            implied_prob=0.91,
+            fee_adj_prob=0.91,
+            snapshot_ts=ts,
+        ),
+    ]
+    write_quotes_grouped(quotes, data_root=str(tmp_path))
+
+    # Without an override they group; with a block they don't.
+    grouped = resolve(data_root=str(tmp_path), write=False).event_map
+    assert grouped[grouped["market_id"].isin(["NBA_A", "NBA_B"])]["event_id"].nunique() == 1
+
     override = tmp_path / "ov.csv"
     override.write_text(
-        "source_a,market_id_a,source_b,market_id_b,relation\n"
-        "manifold,ManifoldNBA01,kalshi,KXNBAGAME-26JUN17BOSLAL-BOS,block\n"
+        "source_a,market_id_a,source_b,market_id_b,relation\nmanifold,NBA_A,kalshi,NBA_B,block\n"
     )
-    res = resolve(data_root=landed, overrides_path=str(override), write=False)
-    em = res.event_map
-    nba = em[em["market_id"].isin(["ManifoldNBA01", "KXNBAGAME-26JUN17BOSLAL-BOS"])]
+    res = resolve(data_root=str(tmp_path), overrides_path=str(override), write=False)
+    nba = res.event_map[res.event_map["market_id"].isin(["NBA_A", "NBA_B"])]
     assert nba["event_id"].nunique() == 2  # blocked -> not grouped
     assert res.overrides_applied >= 1
 

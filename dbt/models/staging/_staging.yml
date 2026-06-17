@@ -38,6 +38,24 @@ models:
       - name: snapshot_ts
         data_tests: [not_null]
 
+  - name: stg_oddsapi
+    description: >
+      Cleaned The Odds API quotes (sportsbook consensus, data-only). implied_prob is
+      the vig-removed win probability per team.
+    columns:
+      - name: quote_key
+        data_tests: [unique, not_null]
+      - name: source
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["oddsapi"]
+      - name: outcome
+        data_tests: [not_null]
+      - name: snapshot_ts
+        data_tests: [not_null]
+
   - name: stg_event_map
     description: >
       Entity-resolution output: each market mapped to its canonical event_id,
