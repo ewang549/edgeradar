@@ -1,0 +1,62 @@
+[
+  {
+    "id": "1971078",
+    "question": "Will SpaceX IPO by August 31, 2026?",
+    "slug": "will-spacex-ipo-by-august-31-2026",
+    "conditionId": "0x9c01bea9b869ca2acb0c28efa8bbaba184f807c3c3cd9bccaad9e6022dfc8a19",
+    "endDate": "2026-08-31T00:00:00Z",
+    "active": true,
+    "closed": false,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "outcomePrices": "[\"0.9755\", \"0.0245\"]",
+    "bestBid": 0.974,
+    "bestAsk": 0.977,
+    "spread": 0.003,
+    "volume": "99998.31"
+  },
+  {
+    "id": "2133688",
+    "question": "Will Club Alianza Atletico win on 2026-05-28?",
+    "slug": "sud-tig-aas-2026-05-28-aas",
+    "conditionId": "0x670e88390e9f405c0c5d18faa77d911eec2dfecf09700bdfe9ae87b662386855",
+    "endDate": "2026-05-29T00:30:00Z",
+    "active": true,
+    "closed": false,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "outcomePrices": "[\"0.105\", \"0.895\"]",
+    "bestBid": 0.09,
+    "bestAsk": 0.12,
+    "spread": 0.03,
+    "volume": "999.99"
+  },
+  {
+    "id": "2328376",
+    "question": "Will the highest temperature in Ankara be 23C or higher on May 24?",
+    "slug": "highest-temperature-in-ankara-on-may-24-2026-23corhigher",
+    "conditionId": "0x052c559da7e43e9f9d24745d7f8c6b796085f5b6fbe1425e589f5dcd6f2236f9",
+    "endDate": "2026-05-24T12:00:00Z",
+    "active": true,
+    "closed": false,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "outcomePrices": "[\"0.0045\", \"0.9955\"]",
+    "bestBid": 0.004,
+    "bestAsk": 0.005,
+    "spread": 0.001,
+    "volume": "99.99"
+  },
+  {
+    "id": "9999999",
+    "question": "Closed market example (should be filtered out)",
+    "slug": "closed-example",
+    "conditionId": "0xclosedexample",
+    "endDate": "2026-01-01T00:00:00Z",
+    "active": false,
+    "closed": true,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "outcomePrices": "[\"1.0\", \"0.0\"]",
+    "bestBid": 1.0,
+    "bestAsk": 1.0,
+    "spread": 0.0,
+    "volume": "0"
+  }
+]

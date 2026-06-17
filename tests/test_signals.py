@@ -38,8 +38,19 @@ def test_normal_cdf_and_prob_above():
 
 def test_parse_threshold():
     assert parse_threshold("Will the high temperature in NYC be above 82.5F?") == ("above", 82.5)
-    assert parse_threshold("Will the low be below 40F?") == ("below", 40.0)
+    assert parse_threshold("Will the low be below 40 degrees?") == ("below", 40.0)
     assert parse_threshold("Will the Celtics win?") is None
+    # Regression: sports markets must NOT parse as a temperature threshold.
+    assert parse_threshold("New York Mets wins by over 1.5 runs") is None
+    assert parse_threshold("yes Over 4.5 goals scored") is None
+
+
+def test_is_temperature_market_rejects_sports():
+    from edgeradar.weather import is_temperature_market
+
+    assert is_temperature_market("Will the high temperature in NYC be above 82.5F?")
+    assert not is_temperature_market("New York Mets wins by over 1.5 runs")
+    assert not is_temperature_market("yes Golden State, no Over 4.5 goals scored")
 
 
 def test_weather_edge_end_to_end(tmp_path, monkeypatch):

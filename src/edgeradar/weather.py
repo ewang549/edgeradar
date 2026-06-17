@@ -34,16 +34,31 @@ from edgeradar.storage import read_quotes
 # title + a day-ahead sigma (deg F). Add rows here to cover more cities.
 LOCATIONS: dict[str, dict] = {
     "NYC": {
-        "forecast_url": "https://api.weather.gov/gridpoints/OKX/33,35/forecast",
+        # NWS grid IDs aren't stable, so we store lat/lon and look up the correct
+        # forecast endpoint at runtime via /points/{lat},{lon} (Central Park here).
+        "lat": 40.7790,
+        "lon": -73.9692,
         "city_tokens": ("nyc", "new york"),
         "sigma": 4.0,
     },
 }
 
+# The number must be followed by a temperature unit (°, F, or "degrees") so we don't
+# mistake "wins by over 1.5 runs" or "Over 4.5 goals" for a temperature threshold.
 _THRESHOLD_RE = re.compile(
-    r"(above|over|greater than|at least|below|under|less than)\s+\$?(\d+(?:\.\d+)?)", re.IGNORECASE
+    r"(above|over|greater than|at least|below|under|less than)"
+    r"\s+(\d+(?:\.\d+)?)\s*(?:°|degrees?|f)\b",
+    re.IGNORECASE,
 )
 _ABOVE_WORDS = {"above", "over", "greater than", "at least"}
+# A second guard: the title must actually talk about temperature.
+_TEMP_KEYWORDS = ("temperature", "temp", "degrees", "°")
+
+
+def is_temperature_market(title: str) -> bool:
+    """True only for genuine temperature markets (guards against sports/other markets)."""
+    t = title.lower()
+    return any(kw in t for kw in _TEMP_KEYWORDS)
 
 
 @dataclass
@@ -91,13 +106,24 @@ def fetch_forecasts(location: str, *, dry_run: bool = False) -> list[Forecast]:
         data = json.loads(sample.read_text())
     else:
         settings = get_settings()
-        resp = httpx.get(
-            cfg["forecast_url"],
-            headers={"User-Agent": settings.nws_user_agent, "Accept": "application/geo+json"},
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        headers = {"User-Agent": settings.nws_user_agent, "Accept": "application/geo+json"}
+        try:
+            # 1) Resolve lat/lon to the correct (current) forecast URL for this grid.
+            pts = httpx.get(
+                f"{settings.nws_api_base}/points/{cfg['lat']},{cfg['lon']}",
+                headers=headers,
+                timeout=30.0,
+            )
+            pts.raise_for_status()
+            forecast_url = pts.json()["properties"]["forecast"]
+            # 2) Fetch the actual forecast.
+            resp = httpx.get(forecast_url, headers=headers, timeout=30.0)
+            resp.raise_for_status()
+            data = resp.json()
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            # Never let a weather hiccup crash the pipeline; just skip this location.
+            print(f"[weather] NWS fetch failed for {location} ({exc}); skipping.")
+            return []
 
     out: list[Forecast] = []
     for period in data.get("properties", {}).get("periods", []):
@@ -132,6 +158,8 @@ def build_weather_edge(*, data_root: str | None = None, dry_run: bool = False) -
 
         for _, q in quotes.iterrows():
             title = str(q["title"])
+            if not is_temperature_market(title):
+                continue  # skip non-temperature markets (sports, etc.)
             parsed = parse_threshold(title)
             location = _match_location(title)
             if parsed is None or location is None:

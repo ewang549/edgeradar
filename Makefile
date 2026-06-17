@@ -8,7 +8,7 @@ SHELL := /bin/bash
 # Run a command inside the app container.
 APP_EXEC := docker compose exec app
 
-.PHONY: help up down logs ps console install lint test config-check ingest produce consume resolve weather evaluate dagster dbt dbt-test dashboard
+.PHONY: help up down logs ps console install lint test config-check ingest produce consume resolve weather evaluate alert refresh notify dagster dbt dbt-test dashboard
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -64,6 +64,19 @@ evaluate:  ## Log signals + score vs outcomes; build eval dbt marts (Phase 6)
 
 alert:  ## Fire Discord alerts for above-threshold signals (read-only). ARGS=--dry-run to preview
 	$(APP_EXEC) edgeradar alert $(ARGS)
+
+refresh:  ## ONE COMMAND: pull live data (all sources), rebuild warehouse, score signals
+	$(APP_EXEC) edgeradar ingest --source all
+	$(APP_EXEC) edgeradar weather
+	$(APP_EXEC) edgeradar resolve
+	$(MAKE) dbt
+	$(MAKE) evaluate
+	@echo "Refresh complete. Open the dashboard with: make dashboard"
+
+notify:  ## ONE COMMAND: refresh everything, then post signals to Discord
+	$(MAKE) refresh
+	$(APP_EXEC) edgeradar alert
+	@echo "Sent any above-threshold signals to Discord."
 
 dashboard:  ## Launch the Streamlit dashboard at http://localhost:8501 (read-only)
 	$(APP_EXEC) sh -c "cd /app && streamlit run src/edgeradar/dashboard/app.py --server.address 0.0.0.0 --server.port 8501"

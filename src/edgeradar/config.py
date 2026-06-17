@@ -59,6 +59,9 @@ class Settings(BaseSettings):
 
     manifold_api_base: str = Field(default="https://api.manifold.markets/v0")
 
+    # Polymarket public data API (data-only consensus signal; US users can't trade).
+    polymarket_api_base: str = Field(default="https://gamma-api.polymarket.com")
+
     odds_api_base: str = Field(default="https://api.the-odds-api.com/v4")
     odds_api_key: str = Field(default="")  # free tier ~500 req/mo — cache hard
 

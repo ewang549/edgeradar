@@ -20,6 +20,24 @@ models:
       - name: snapshot_ts
         data_tests: [not_null]
 
+  - name: stg_polymarket
+    description: >
+      Cleaned Polymarket quotes (data-only consensus source). implied_prob is the
+      "Yes" share price; NaN becomes NULL.
+    columns:
+      - name: quote_key
+        data_tests: [unique, not_null]
+      - name: source
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["polymarket"]
+      - name: outcome
+        data_tests: [not_null]
+      - name: snapshot_ts
+        data_tests: [not_null]
+
   - name: stg_event_map
     description: >
       Entity-resolution output: each market mapped to its canonical event_id,

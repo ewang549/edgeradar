@@ -11,11 +11,13 @@ from dataclasses import dataclass
 from edgeradar.adapters.base import SourceAdapter
 from edgeradar.adapters.kalshi import KalshiAdapter
 from edgeradar.adapters.manifold import ManifoldAdapter
+from edgeradar.adapters.polymarket import PolymarketAdapter
 from edgeradar.storage import write_quotes, write_raw
 
 REGISTRY: dict[str, type[SourceAdapter]] = {
     "manifold": ManifoldAdapter,
     "kalshi": KalshiAdapter,
+    "polymarket": PolymarketAdapter,
 }
 
 
@@ -47,8 +49,20 @@ def run_ingest(source: str = "all", *, dry_run: bool = False) -> list[IngestResu
     results: list[IngestResult] = []
     for slug in slugs:
         adapter = REGISTRY[slug](dry_run=dry_run)
-        raw = list(adapter.fetch())
-        quotes = list(adapter.normalize(raw))
+        try:
+            raw = list(adapter.fetch())
+            quotes = list(adapter.normalize(raw))
+        except Exception as exc:  # noqa: BLE001
+            # In dry-run (tests/CI) a failure is a real bug — let it surface.
+            # On a live run, a transient network/API hiccup for one source must
+            # not crash the whole pipeline; log it and keep the other sources.
+            if dry_run:
+                raise
+            print(f"[ingest] {slug} failed ({exc}); skipping this source.")
+            results.append(
+                IngestResult(source=slug, n_raw=0, n_quotes=0, raw_path=None, clean_path=None)
+            )
+            continue
         raw_path = write_raw(raw)
         clean_path = write_quotes(quotes)
         results.append(

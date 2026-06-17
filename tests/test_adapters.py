@@ -59,11 +59,11 @@ def test_dry_run_ingestion_lands_parquet(tmp_path, monkeypatch):
     get_settings.cache_clear()  # settings are cached; re-read with the temp DATA_ROOT
 
     results = run_ingest("all", dry_run=True)
-    assert {r.source for r in results} == {"manifold", "kalshi"}
+    assert {r.source for r in results} == {"manifold", "kalshi", "polymarket"}
     assert all(r.clean_path is not None for r in results)
 
     df = read_quotes(data_root=str(tmp_path))
-    assert len(df) == 7  # 4 manifold + 3 kalshi
+    assert len(df) == 10  # 4 manifold + 3 kalshi + 3 polymarket
 
 
 def test_reruns_are_idempotent(tmp_path, monkeypatch):
@@ -76,4 +76,4 @@ def test_reruns_are_idempotent(tmp_path, monkeypatch):
     first = len(read_quotes(data_root=str(tmp_path)))
     run_ingest("all", dry_run=True)  # same fixed dry-run snapshot -> overwrites
     second = len(read_quotes(data_root=str(tmp_path)))
-    assert first == second == 7  # no duplicates accumulate
+    assert first == second == 10  # no duplicates accumulate
