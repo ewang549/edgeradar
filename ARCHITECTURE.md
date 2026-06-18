@@ -141,18 +141,54 @@ fee-surviving edge across **many** events — a few samples are illustrative onl
 
 ## 9. Serving + alerts (Phase 7, implemented)
 
-The **Streamlit dashboard** (`dashboard/app.py`) is a thin, read-only reader over
-the DuckDB marts: a divergence leaderboard, per-event cross-platform price view, the
-weather-edge panel, and the evaluation/calibration report. It opens DuckDB in
-read-only mode and caches queries briefly. The **Discord alerter** (`alerter.py`)
-selects signals above `alert_min_edge`, formats a short digest, and POSTs it to a
-webhook (or prints with `--dry-run`). Both assert the read-only guardrail; the
-alerter raises rather than run if `enable_order_execution` is ever true. Neither has
-any code path that could place an order — they only surface information to a human.
+The **Streamlit dashboard** (`dashboard/app.py`) is a thin, read-only, 7-page
+product over the DuckDB marts and the Parquet reports: Overview (KPIs),
+Divergences (filterable explorer with per-signal edge breakdowns), Resolution
+(matched events + near misses), Weather, Calibration, Source health, and System
+status. It opens DuckDB in read-only mode, caches queries briefly, and degrades to
+a friendly empty state (never a raw error) when a stage hasn't run. The **Discord
+alerter** (`alerter.py`) selects signals above `alert_min_edge`, formats a short
+digest, and POSTs it to a webhook (or prints with `--dry-run`). Both assert the
+read-only guardrail; the alerter raises rather than run if `enable_order_execution`
+is ever true. Neither has any code path that could place an order — they only
+surface information to a human.
 
-## 10. Open questions / decisions to revisit
+## 10. The explainable analytics layer
 
-- Consensus weighting: volume-weighted vs sharpest-source-weighted (Phase 5).
-- Kalshi fee schedule specifics to encode (fill exact formula in Phase 5).
-- Which sports/markets to seed entity resolution with (Phase 4 decision).
-- Whether to promote DuckDB → Postgres before or after Phase 6.
+`analytics.py` is a set of **pure functions** — no model state, no network — so
+every label the dashboard shows can be explained in one sentence. It decomposes an
+apparent edge into `raw → fee_adjusted → uncertainty_adjusted` (the last layer
+subtracts cross-platform price dispersion, charging the edge for a noisy
+consensus); assigns a **confidence tier** from venue count and agreement; and
+scores **source reliability** (0–100) by blending freshness, completeness, and —
+when outcomes exist — calibration, redistributing weight rather than penalizing a
+source that simply has no settled history yet. The confidence logic is duplicated
+intentionally in both Python and `mart_divergence.sql` and kept byte-for-byte in
+sync so the warehouse and the dashboard can never disagree; a test asserts the
+Python side matches the SQL thresholds.
+
+The dbt staging models are collapsed onto a single `stage_quotes(source)` **macro**
+so all four sources share one definition — the union in `fact_market_quotes` can
+never drift because there is only one piece of logic to change.
+
+## 11. Data quality & observability
+
+`quality.py` turns the lake into a health report (`data/quality/data_quality.parquet`,
+one row per source) using deliberately boring, high-value checks: freshness,
+volume, null rate, **duplicate rate** (a direct test of ingestion idempotency —
+the natural key should make it zero), probability-bounds violations, and a
+partial-ingest heuristic (latest snapshot vs the source's median volume). The
+checks are pure functions over a DataFrame, unit-tested independently of the lake,
+and surfaced both in the dashboard's Source-health page and via `edgeradar
+quality`. `edgeradar doctor` complements this by diagnosing the *environment*
+(Python, deps, files, sample data, and the read-only guardrail) before a demo.
+
+## 12. Open questions / decisions to revisit
+
+- Consensus weighting: equal vs volume-weighted vs reliability-weighted (the
+  reliability score in `analytics.py` is the natural input for the last option).
+- Embedding-based candidate generation for the fuzzy entity-resolution tier, with
+  the override table as the human confirmation store.
+- Whether to promote DuckDB → Postgres (the dbt models are written to make this a
+  connection change).
+- Longer-horizon live signal calibration as logged signals accumulate resolutions.

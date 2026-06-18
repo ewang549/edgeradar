@@ -49,15 +49,25 @@ models:
   - name: mart_divergence
     description: >
       Ranked, fee-aware cross-platform mispricing signals. One row per market in a
-      multi-platform event, with its deviation from leave-one-out consensus and the
-      net edge after trading cost. Review aid only — nothing is auto-traded.
+      multi-platform event, with its deviation from leave-one-out consensus, the
+      net edge after trading cost, the cross-platform price dispersion, and an
+      uncertainty-adjusted edge plus a readable confidence tier. Ranked by
+      uncertainty_adj_edge. Review aid only — nothing is auto-traded.
     columns:
       - name: event_id
         data_tests: [not_null]
       - name: edge_net
         data_tests: [not_null]
+      - name: uncertainty_adj_edge
+        data_tests: [not_null]
       - name: is_signal
         data_tests: [not_null]
+      - name: confidence_tier
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["high", "medium", "low"]
 
   - name: mart_weather_edge
     description: >

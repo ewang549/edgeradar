@@ -232,6 +232,110 @@ def _cmd_alert(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_quality(_: argparse.Namespace) -> int:
+    """Scan the clean lake, write the quality report, and print a health summary."""
+    from edgeradar.quality import write_quality_report
+
+    path = write_quality_report()
+    if path is None:
+        print("[quality] No clean data found. Run `edgeradar ingest --dry-run` first.")
+        return 0
+    from edgeradar.quality import read_quality_report
+
+    df = read_quality_report()
+    print(f"[quality] Source health  ->  {path}\n")
+    header = f"  {'source':<11}{'grade':<7}{'quotes':>7}{'markets':>8}{'age(min)':>10}  issues"
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+    for _, r in df.iterrows():
+        am = r["age_minutes"]
+        age = "" if am is None or am != am else f"{am:.0f}"  # noqa: PLR0124  (NaN check)
+        print(
+            f"  {r['source']:<11}{r['reliability_grade']:<7}{int(r['n_quotes']):>7}"
+            f"{int(r['n_markets']):>8}{age:>10}  {r['issues']}"
+        )
+    return 0
+
+
+def _cmd_doctor(_: argparse.Namespace) -> int:
+    """Diagnose the local environment and report what's ready vs missing.
+
+    Read-only. Exits non-zero only on a hard failure (something that would stop
+    the offline demo). Warnings are informational.
+    """
+    import shutil
+    import sys as _sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    ok, warn, fail = "  ✓", "  !", "  ✗"
+    hard_fail = False
+
+    print("EdgeRadar doctor — environment check\n")
+
+    # Python version.
+    v = _sys.version_info
+    line = ok if v >= (3, 11) else warn
+    print(f"{line} Python {v.major}.{v.minor}.{v.micro} (project targets 3.11)")
+
+    # Settings load + read-only guardrail.
+    try:
+        s = get_settings()
+        print(f"{ok} settings load")
+        if s.enable_order_execution:
+            print(f"{fail} order execution is ENABLED — must be False (read-only project)")
+            hard_fail = True
+        else:
+            print(f"{ok} read-only guardrail: order execution disabled")
+    except Exception as exc:  # noqa: BLE001
+        print(f"{fail} settings failed to load: {exc}")
+        hard_fail = True
+
+    # Key project files.
+    required = {
+        "pyproject.toml": root / "pyproject.toml",
+        "dbt project": root / "dbt" / "dbt_project.yml",
+        "sample responses (offline demo)": root / "sample_responses",
+        "resolution overrides seed": root / "seeds",
+    }
+    for label, p in required.items():
+        if p.exists():
+            print(f"{ok} {label}")
+        else:
+            print(f"{fail} missing: {label} ({p})")
+            hard_fail = True
+
+    # Tooling (warn-only; the demo path can run without these).
+    for tool, why in (("dbt", "warehouse build"), ("docker", "streaming stack")):
+        if shutil.which(tool):
+            print(f"{ok} {tool} on PATH")
+        else:
+            print(f"{warn} {tool} not on PATH (needed for: {why})")
+
+    # Sample data for the offline path.
+    sample_dir = root / "sample_responses"
+    samples = list(sample_dir.glob("**/*.json")) if sample_dir.exists() else []
+    if samples:
+        print(f"{ok} {len(samples)} sample response file(s) for `--dry-run`")
+    else:
+        print(f"{warn} no sample response files found (offline demo may be limited)")
+
+    # Populated lake (warn-only; doctor doesn't ingest).
+    data_dir = root / "data"
+    clean = list((data_dir / "clean").glob("**/*.parquet")) if data_dir.exists() else []
+    if clean:
+        print(f"{ok} clean lake populated ({len(clean)} parquet file(s))")
+    else:
+        print(f"{warn} clean lake empty — run `make demo` or `edgeradar ingest --dry-run`")
+
+    print()
+    if hard_fail:
+        print("Result: NOT READY — fix the ✗ items above.")
+        return 1
+    print("Result: ready. Try `make demo` for the full offline walkthrough.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="edgeradar", description="EdgeRadar CLI (read-only).")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -317,6 +421,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="Print the message instead of sending."
     )
     p_alert.set_defaults(func=_cmd_alert)
+
+    sub.add_parser(
+        "quality", help="Scan the lake: per-source freshness, nulls, dups, reliability grade."
+    ).set_defaults(func=_cmd_quality)
+
+    sub.add_parser(
+        "doctor", help="Diagnose the local environment (deps, files, sample data, guardrails)."
+    ).set_defaults(func=_cmd_doctor)
 
     return parser
 

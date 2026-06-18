@@ -8,7 +8,7 @@ SHELL := /bin/bash
 # Run a command inside the app container.
 APP_EXEC := docker compose exec app
 
-.PHONY: help up down logs ps console install lint test config-check ingest produce consume resolve weather evaluate backfill alert reset refresh notify dagster dbt dbt-test dashboard
+.PHONY: help up down logs ps console install lint test config-check ingest produce consume resolve weather evaluate backfill alert reset refresh notify dagster dbt dbt-test dashboard demo quality doctor data-quality
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -35,6 +35,29 @@ install:  ## Create local venv + install deps with uv (for running outside Docke
 
 config-check:  ## Verify settings load (runs inside the app container)
 	$(APP_EXEC) edgeradar config-check
+
+doctor:  ## Diagnose the environment: deps, files, sample data, read-only guardrail
+	$(APP_EXEC) edgeradar doctor
+
+demo:  ## FASTEST OFFLINE DEMO: dry-run ingest -> resolve -> warehouse -> quality (no network)
+	$(APP_EXEC) sh -c "rm -rf data/clean data/raw"
+	$(APP_EXEC) edgeradar ingest --source all --dry-run
+	$(APP_EXEC) edgeradar weather --dry-run
+	$(APP_EXEC) edgeradar resolve
+	$(MAKE) dbt
+	$(APP_EXEC) edgeradar quality
+	@echo ""
+	@echo "Demo data is built from bundled sample responses (offline)."
+	@echo "Open the product dashboard with:  make dashboard"
+
+quality:  ## QUALITY GATE: ruff lint + format check, pytest, and dbt build/test
+	$(APP_EXEC) ruff check .
+	$(APP_EXEC) ruff format --check .
+	$(APP_EXEC) pytest -q
+	$(APP_EXEC) sh -c "mkdir -p data/warehouse && dbt build --exclude tag:eval --project-dir dbt --profiles-dir dbt"
+
+data-quality:  ## Scan the lake and (re)write the data-quality / source-health report
+	$(APP_EXEC) edgeradar quality
 
 lint:  ## Ruff lint + format check (inside the app container)
 	$(APP_EXEC) ruff check .
@@ -81,6 +104,7 @@ refresh:  ## ONE COMMAND: pull live data (all sources), rebuild warehouse, score
 	$(APP_EXEC) edgeradar resolve
 	$(MAKE) dbt
 	$(MAKE) evaluate
+	$(APP_EXEC) edgeradar quality
 	@echo "Refresh complete. Open the dashboard with: make dashboard"
 
 notify:  ## ONE COMMAND: refresh everything, then post signals to Discord

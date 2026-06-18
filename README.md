@@ -2,443 +2,258 @@
 
 ![CI](https://github.com/ethanwang/edgeradar/actions/workflows/ci.yml/badge.svg)
 
-A **read-only** cross-platform prediction-market mispricing engine. It ingests
-live odds/prices from several prediction markets and sportsbooks, normalizes
-everything to implied probabilities, resolves which markets refer to the same
-real-world event, and surfaces divergences (one platform pricing an event
-materially differently from the consensus) **net of fees and spread**. A weather
-module compares official NWS temperature forecasts to Kalshi daily-temperature
-markets.
+**EdgeRadar is a read-only data platform that watches the same real-world events
+across multiple prediction markets and sportsbooks, and surfaces where one venue
+disagrees with the consensus — after fees, after uncertainty, and only when the
+data underneath is trustworthy.** It ingests live odds, normalizes everything to
+implied probabilities, figures out which differently-worded markets describe the
+same event, ranks the divergences, and then does the part most "alpha-finder"
+projects skip: it scores its own predictions against settled outcomes so you can
+tell whether an apparent edge is real.
 
-> ⚠️ **EdgeRadar never places orders or executes trades.** It ingests public data
-> and *notifies a human*, who makes every decision manually. Every signal is
-> logged and later scored against the real outcome, so we can tell whether an
-> "edge" is real *before* acting on it. See [`ARCHITECTURE.md`](ARCHITECTURE.md).
-> Prediction markets are mostly efficient — the realistic payoff is a strong
-> portfolio project, not riches.
+> 🔒 **EdgeRadar never places orders, never executes trades, and contains no
+> betting flow.** It ingests public data and presents it to a human for review.
+> Every signal is logged and later scored against the real outcome. The honest
+> conclusion baked into the project: prediction markets are mostly efficient and
+> trading costs usually eat the gap — so the deliverable is a rigorous analytics
+> and evaluation system, not a money printer. See [`FINDINGS.md`](FINDINGS.md).
 
-## Architecture (target end state)
+---
+
+## Why this is technically interesting
+
+It is a complete, production-shaped data system rather than a single script:
+
+- **Streaming ingestion** through a Kafka-compatible broker (Redpanda) with a
+  pluggable adapter per source — adding a venue is one class.
+- **A partitioned Parquet lake → DuckDB warehouse → dbt** with staging/marts and
+  data-quality tests, plus a DRY macro so all four source-staging models stay in
+  lockstep.
+- **Entity resolution** that matches the *same event* across venues using
+  category blocking, fuzzy title+date scoring, numeric and subject guards, and a
+  human override table — the genuinely hard part.
+- **An explainable analytics layer** that decomposes every apparent edge into
+  raw → fee-adjusted → uncertainty-adjusted, attaches a confidence tier, and
+  scores each source's reliability. No black-box ML; every label is a one-line
+  explanation.
+- **Forecast evaluation done honestly**: signal logging, calibration buckets,
+  Brier scores, and a market-wide calibration study that surfaced a real
+  favorite-longshot bias across 1,500+ settled markets.
+- **Observability**: a data-quality report (freshness, null/duplicate rates,
+  probability-bounds checks, partial-ingest detection) that the dashboard renders
+  as source-health grades.
+- **Operational polish**: a 7-page Streamlit product, Dagster orchestration,
+  Docker Compose for the whole stack, GitHub Actions CI, and a one-command
+  offline demo.
+
+## Quick start — the 60-second offline demo
+
+Everything runs locally and free. The fastest path uses bundled sample responses,
+so it needs no API keys, no network, and no live markets:
+
+```bash
+cp .env.example .env     # defaults are fine
+make up                  # build + start the stack (Docker Desktop required)
+make doctor              # sanity-check the environment
+make demo                # offline: ingest → resolve → warehouse → quality report
+make dashboard           # open http://localhost:8501
+```
+
+`make demo` builds the lake from `sample_responses/`, runs entity resolution,
+builds the dbt warehouse, and writes the data-quality report — populating every
+page of the dashboard deterministically.
+
+To run against **live** public data instead (Manifold and Kalshi reads need no
+key; The Odds API needs a free key in `.env`):
+
+```bash
+make refresh             # pull live data, rebuild warehouse, score, quality report
+make notify              # same, then post above-threshold signals to Discord
+```
+
+## Architecture
 
 ```
-  SOURCE ADAPTERS                STREAMING            DATA LAKE (MinIO, Parquet)
+  SOURCE ADAPTERS               STREAMING            DATA LAKE (Parquet)
  ┌───────────────┐
  │ Kalshi        │\            ┌──────────┐          ┌────────────────────────┐
  │ Manifold      │ \           │ Redpanda │          │ raw/<source>/date=...  │
- │ Metaculus     │  ──fetch──> │  topics  │ ─consume─>│ clean/<source>/date=.. │
- │ The Odds API  │ /           │(quotes_*)│  normalize└───────────┬────────────┘
- │ NWS weather   │/            └──────────┘  +fee-adj             │
- └───────────────┘             (Phase 3)     +dedupe              v
-        │ (Phase 1: direct land)                          ┌───────────────┐
-        └────────────────────────────────────────────────>│ DuckDB        │
-                                                           │ warehouse     │
-                                                           └───────┬───────┘
-                                                                   │ dbt (Phase 2/4/5)
-                                          ┌────────────────────────┼───────────────────┐
-                                          v                        v                   v
-                                   stg_<source>            dim_event (entity      mart_divergence
-                                          │                resolution, Phase 4)   mart_weather_edge
-                                          v                        │              (Phase 5, fee-aware)
-                                   fact_market_quotes <────────────┘                   │
-                                   (event, platform, outcome,                          v
-                                    implied_prob, fee_adj_prob, ts)              signal_log + scoring
-                                                                                 (Phase 6: hit rate,
-                                                                                  calibration, net PnL)
-                                                                                        │
-                                                          ┌─────────────────────────────┴───┐
-                                                          v                                  v
-                                                  Streamlit dashboard              Discord alerter
-                                                  (Phase 7, read-only)             (Phase 7, above-
-                                                                                    threshold signals)
+ │ Polymarket    │  ──fetch──> │  topics  │ ─consume─>│ clean/<source>/date=.. │
+ │ The Odds API  │ /           │(quotes_*)│ normalize └───────────┬────────────┘
+ │ NWS weather   │/            └──────────┘ +fee-adj              │
+ └───────────────┘             (streaming)  +dedupe               v
+        │ (batch: direct land)                            ┌───────────────┐
+        └──────────────────────────────────────────────> │ DuckDB        │
+                                                          │ warehouse     │
+                                                          └───────┬───────┘
+                                       ┌──────────────────────────┤ dbt
+                                       v                          v
+                              dim_event (entity            mart_divergence
+                              resolution)            (fee + uncertainty aware,
+                                       │              confidence-tiered)
+                                       v                          │
+                              fact_quotes_with_event              v
+                                                            signal_log + scoring
+                                                            (hit rate, calibration,
+                                                             net PnL, Brier)
+                                       ┌──────────────────────────┤
+                                       v                          v
+                              Streamlit product            Discord alerter
+                              (7 pages, read-only)         (above-threshold, read-only)
 
-  Orchestration: Dagster (batch resolution + scoring).  CI: GitHub Actions (lint + dbt build + tests).
-  Everything runs locally & free via Docker Compose.
+  analytics.py — confidence, uncertainty, edge decomposition, source reliability
+  quality.py   — freshness / nulls / duplicates / bounds → data_quality.parquet
+  Orchestration: Dagster.   CI: GitHub Actions (ruff + pytest + dbt build).
 ```
 
-## What works so far
+Data flows in one direction and each stage is independently testable. The
+warehouse is the single source of truth the dashboard and alerter read; neither
+can write back, and there is no code path to a venue's trading API.
 
-**Phase 0 — Scaffold.**
-- Repo structure + Python package skeleton (`src/edgeradar`).
-- The pluggable `SourceAdapter` interface (`adapters/base.py`) — adding a platform = one class.
-- Typed settings module (`config.py`); nothing hardcoded, all config from env/`.env`.
-- Documented, tested price→implied-probability math (`normalize.py`).
-- `docker-compose.yml` with **MinIO** (S3-compatible lake) + bucket init + a Python `app` container; **DuckDB** is file-based (no container).
-- `Makefile`, `.env.example`, `.gitignore`, smoke tests, this README, and `ARCHITECTURE.md`.
+## The analytics: from a price gap to an honest edge
 
-**Phase 1 — First two adapters (current).**
-- **Manifold** adapter (`adapters/manifold.py`): no-auth fetch of binary markets; `probability` → `implied_prob` directly.
-- **Kalshi** adapter (`adapters/kalshi.py`): public read-only feed; YES bid/ask **midpoint** → `implied_prob` (fee/spread modeled later, in Phase 5).
-- **Local data lake** (`storage.py`): lands **raw** JSON payloads and **clean** normalized quotes as Parquet, partitioned `source=/date=`, deduped on the natural key. (MinIO/S3 writer comes in a later phase behind the same interface.)
-- **Ingestion runner + registry** (`ingest.py`) wired to the `edgeradar ingest` CLI and `make ingest`.
-- **`--dry-run`** mode for both adapters reads committed `sample_responses/` fixtures — fully offline, spends no API quota.
-- Idempotent: re-running a dry-run overwrites the same snapshot file (no duplicate accumulation).
+A raw price difference is not an opportunity. EdgeRadar peels every apparent edge
+back in layers (`src/edgeradar/analytics.py`, mirrored in `mart_divergence`):
 
-**Phase 2 — Warehouse + dbt (current).**
-- **dbt-duckdb** project under `dbt/` (project + in-repo `profiles.yml`).
-- **Staging views** `stg_manifold`, `stg_kalshi`: read the clean Parquet lake directly, standardize types, convert NaN probabilities to NULL, add a surrogate `quote_key`.
-- **`fact_market_quotes`** table: all sources unified at grain `(source, market_id, outcome, snapshot_ts)` — the single table everything downstream reads.
-- **dbt tests** (21): `quote_key` unique + not-null (proves idempotent ingestion), `source`/`outcome`/`price`/`snapshot_ts` not-null, `accepted_values` on `source`, and a singular test enforcing every non-null probability is strictly inside (0,1).
-- `make dbt` builds + tests; `make dbt-test` runs tests only.
+| Layer | Definition | What it answers |
+|---|---|---|
+| **Raw edge** | `\|price − consensus\|` | How far is this venue from the others? |
+| **Fee-adjusted edge** | `raw − trade_cost` | Does it survive the cost to act? |
+| **Uncertainty-adjusted edge** | `fee_adj − dispersion` | Does it survive the platforms disagreeing? |
 
-**Phase 3 — Streaming (current).**
-- **Redpanda** broker (Kafka-compatible, single container) + **Redpanda Console** UI at http://localhost:8080.
-- **Producer** (`streaming/producer.py`): adapters fetch raw quotes and publish them to the `quotes_raw` topic (keyed `source:market_id`). `make produce`.
-- **Consumer** (`streaming/consumer.py`): drains the topic, normalizes (reusing the same adapter logic), applies the **fee-adjustment hook** (`fees.py` — honest placeholder until Phase 5), dedupes, and writes the clean zone. `make consume`.
-- Pure, unit-tested **serde** and **stream-normalize** layers; the broker is the only non-deterministic part.
-- Idempotent: produce → consume → produce → consume leaves the clean zone duplicate-free.
+`trade_cost` is a real model: Kalshi's per-contract fee `0.07·P·(1−P)` plus half
+the bid/ask spread, in probability units (Manifold/Polymarket/sportsbook feeds
+are data-only, cost 0). `dispersion` is the cross-platform price stddev, so an
+edge is charged for a noisy consensus.
 
-**Phase 4 — Entity resolution (current).**
-- **`entity_resolution.py`**: a layered matcher — category **blocking** → fuzzy **title + date** scoring (token-set Jaccard + sequence ratio, std-lib only) → a **manual override** table — producing an `event_map` (market → canonical `event_id`) with a **confidence** on every match.
-- **Manual overrides** (`seeds/event_overrides.csv`): force a match or block a pair; always beats the fuzzy score.
-- **Reviewable**: `make resolve` prints proposed matches (and near-threshold pairs) with scores so mismatches are easy to catch and correct.
-- **dbt**: `stg_event_map` → `dim_event` (one row per event, sources, confidence) and `fact_quotes_with_event` (every quote tagged with its `event_id` — what Phase 5 reads).
-- On the sample data the two known cross-platform pairs (an NBA game and an NYC-temperature market) group correctly; unrelated markets stay singletons.
+Each divergence also gets a **confidence tier** (high/medium/low) from how many
+independent venues priced the event and how tightly they agree, and each source
+gets a **reliability score** (0–100) blending freshness, completeness, and — once
+outcomes settle — calibration. Every tier and score comes with a plain-English
+reason, never a bare number.
 
-**Phase 5 — Signal engine + weather module (current).**
-- **Fee/spread cost model** (`fees.py`): Kalshi per-contract fee `0.07·P·(1−P)` + half the bid/ask spread, in probability units. Manifold (play money) → 0. Computed in `normalize` so both batch and stream paths carry `spread` + `trade_cost`.
-- **`mart_divergence`**: per market in a multi-platform event, deviation from **leave-one-out consensus**, and `edge_net = |deviation| − trade_cost`, ranked, with an `is_signal` flag. Review aid only.
-- **Weather module** (`weather.py`): pulls NWS forecasts, turns a forecast high into `P(high > threshold)` via a Normal model, parses Kalshi temperature-market thresholds, and computes the fee-aware edge → **`mart_weather_edge`**. `make weather`.
-- On sample data: the NBA divergence is flagged (and shrinks correctly after Kalshi fees), and the NYC weather market shows a large edge (forecast ~0.81 vs Kalshi 0.47).
+## Data quality & observability
 
-**Phase 6 — Evaluation / backtest (current).** The credibility core.
-- **`signal_log`** (`evaluation.py`): appends every currently-flagged signal — with the prices and probabilities *at signal time* — to an append-only log (idempotent on a signal key).
-- **Resolutions** (`seeds/resolutions.csv`): known outcomes (live: Kalshi settled `result` + NWS observed highs).
-- **Scoring**: per signal — the implied side, whether it won (`hit`), the model's predicted probability (for calibration), and hypothetical **PnL net of fees**, summed only over the *tradeable* (Kalshi) side since Manifold is play money. `make evaluate` prints hit rate, calibration, and net PnL.
-- **dbt eval marts** (tag `eval`): `stg_signal_log`, `mart_signal_scores`, `mart_calibration` — kept out of the default build so it never depends on eval outputs.
-- **Dagster** (`orchestration/definitions.py`): asset graph `signal_log → scored_signals → eval_dbt_models`, viewable at `make dagster` (http://localhost:3000).
+`src/edgeradar/quality.py` scans the lake and writes `data/quality/data_quality.parquet`,
+one row per source, covering the boring checks that catch real breakage:
+freshness (minutes since last snapshot), quote/market volume, null rate on the
+field that matters, **duplicate rate** (a direct test of ingestion idempotency),
+probability-bounds violations, and a partial-ingest heuristic (latest snapshot vs
+the source's median volume). The dashboard's **Source health** page renders this
+as letter grades; `make quality` runs the full lint + test + dbt gate.
 
-**Phase 7 — Serving + alerts (current).**
-- **Streamlit dashboard** (`dashboard/app.py`, `make dashboard`, http://localhost:8501): divergence leaderboard, per-event cross-platform prices, weather-edge panel, and the evaluation/calibration report. Read-only views over the warehouse.
-- **Discord alerter** (`alerter.py`, `make alert`): posts above-threshold signals (`alert_min_edge`, default 0.05) to a Discord webhook; `--dry-run` prints instead. Asserts the read-only guardrail and refuses to run if order execution is ever enabled.
+## Evaluation & calibration — the honest core
 
-**Phase 8 — Polish + CI (current).**
-- **GitHub Actions** (`.github/workflows/ci.yml`): lint (ruff) + tests (pytest) + a full `dbt build` (core + eval) on the committed sample dataset — regenerated offline from the dry-run fixtures, so CI needs no APIs, Docker, or services.
-- **[`FINDINGS.md`](FINDINGS.md)**: one honest finding (trading cost dominates cross-platform divergence at retail size) with its limitations.
-- A 60–90s **demo script** (below).
+Most "find the edge" projects stop at a leaderboard. EdgeRadar's credibility comes
+from refusing to:
 
-All eight phases are built. EdgeRadar is feature-complete for its design scope.
+- **Signal logging** captures every flagged signal with the prices and
+  probabilities *at signal time*, append-only and idempotent.
+- **Scoring** records the implied side, whether it won, the predicted probability
+  (for calibration), and hypothetical PnL **net of fees**, counted only on the
+  tradeable (Kalshi) side.
+- **Calibration buckets + Brier score** show predicted vs realized rates.
+- A **market-wide calibration backfill** scores already-settled Kalshi markets for
+  instant context (rather than waiting days for live signals to resolve).
+
+The dashboard is explicit that this market-wide study is *context*, not a backtest
+of EdgeRadar's own live signals — those accumulate forward as logged signals
+resolve. See [`FINDINGS.md`](FINDINGS.md) for the real results (including a
+favorite-longshot bias across 1,523 settled markets, Brier ≈ 0.067).
+
+## The dashboard (7 pages)
+
+`make dashboard` (http://localhost:8501), read-only throughout:
+
+- **Overview** — product framing and top-line KPIs (sources, quotes,
+  cross-platform events, flagged divergences, evaluated outcomes, last ingest).
+- **Divergences** — filter/search/sort explorer with confidence chips and a
+  per-signal edge breakdown ("raw 0.10 → after cost 0.07 ✅ → after uncertainty
+  0.03 ✅").
+- **Resolution** — inspect how each cross-platform event was matched, with
+  near-miss pairs surfaced for review.
+- **Weather** — NWS forecast vs Kalshi temperature markets, with the model
+  assumptions stated up front.
+- **Calibration** — Brier score, calibration curve, by-market-type breakdown, and
+  an explicit limitations note.
+- **Source health** — the data-quality report as reliability grades.
+- **System status** — which pipeline stages have produced data.
+
+### Screenshots
+
+Screenshots aren't committed (they'd go stale and the demo data is deterministic
+anyway). To capture your own for a portfolio writeup: run `make demo` then
+`make dashboard`, and screenshot the Overview, Divergences, and Calibration pages.
+
+## Developer experience
+
+```bash
+make doctor        # diagnose env: Python, deps, files, sample data, read-only guardrail
+make demo          # fastest offline end-to-end build
+make quality       # the full gate: ruff lint + format check, pytest, dbt build/test
+make data-quality  # (re)write the source-health report
+```
+
+`edgeradar doctor` and `edgeradar quality` are also available as direct CLI
+commands. CI (`.github/workflows/ci.yml`) runs the same lint + tests + offline
+`dbt build` on every push.
 
 ## Tech stack
 
-Python 3.11+ with [`uv`](https://docs.astral.sh/uv/) (a fast Rust-based replacement
-for pip+venv) · MinIO (object storage) · DuckDB → Postgres-ready warehouse · dbt
-(dbt-duckdb) · Redpanda (Kafka-compatible streaming) · Dagster (orchestration) ·
-Great Expectations + dbt tests (data quality) · Streamlit (dashboard) · Docker
-Compose · GitHub Actions (CI).
-
-## Quick start (Phase 0)
-
-```bash
-# 1. Configuration
-cp .env.example .env            # defaults are fine for local Phase 0
-
-# 2. Bring up the stack (needs Docker Desktop running)
-make up                         # builds the app image, starts MinIO + bucket init
-
-# 3. Verify (see "Verify the Phase 0 gate" below)
-make ps                         # services healthy?
-open http://localhost:9001      # MinIO console (login with MINIO_ROOT_USER/PASSWORD)
-```
-
-You can also work outside Docker:
-
-```bash
-make install                    # uv creates .venv and installs deps
-uv run pytest                   # run the smoke tests
-uv run edgeradar config-check   # confirm settings load
-```
-
-## Verify the Phase 0 gate
-
-1. `make up` completes and `make ps` shows **minio** as `healthy` and
-   **createbuckets** as `Exited (0)` and **app** as `Up`.
-2. Open the MinIO console at **http://localhost:9001**, log in with the
-   credentials from `.env`, and confirm the **`edgeradar`** bucket exists.
-3. `make config-check` prints settings and reports `order execution = False`.
-4. `uv run pytest` (or `make test`) passes the smoke tests.
-
-When all four hold, the gate is green.
-
-## Verify the Phase 1 gate
-
-With the stack up (`make up`):
-
-1. **Offline dry-run** (no network, no quota):
-   ```bash
-   make ingest SOURCE=all ARGS=--dry-run
-   ```
-   You should see both sources land quotes, e.g. `manifold ... quotes=2` and
-   `kalshi ... quotes=3`, each pointing at a `clean/.../snapshot=...parquet` file.
-
-2. **Inspect the Parquet that landed:**
-   ```bash
-   docker compose exec app python -c "from edgeradar.storage import read_quotes; \
-   print(read_quotes()[['source','market_id','outcome','price','implied_prob','title']].to_string(index=False))"
-   ```
-   Kalshi rows show bid/ask midpoints; the illiquid sample row shows `implied_prob = NaN`
-   (we never fabricate a probability).
-
-3. **Idempotency:** run the dry-run command twice; the quote count stays the same
-   (re-running overwrites the same snapshot rather than duplicating).
-
-4. **Live fetch** (real public data; Manifold needs no key, Kalshi reads are public):
-   ```bash
-   make ingest SOURCE=manifold
-   make ingest SOURCE=kalshi
-   ```
-
-5. **Tests:** `make test` → 9 passing (Phase 0 + Phase 1).
-
-## Verify the Phase 2 gate
-
-dbt (data build tool) runs SQL transformations and data-quality tests. Because we
-added a new dependency (`dbt-duckdb`), rebuild the image once:
-
-```bash
-make down && make up          # rebuilds the app image with dbt installed
-```
-
-Then:
-
-1. **Land some data** (dbt reads the clean Parquet lake):
-   ```bash
-   make ingest SOURCE=all ARGS=--dry-run     # or live: make ingest SOURCE=manifold
-   ```
-
-2. **Build + test the warehouse:**
-   ```bash
-   make dbt
-   ```
-   Expect `Completed successfully` and `PASS=24 ... ERROR=0` (2 views + 1 table + 21 tests).
-
-3. **Query across sources:**
-   ```bash
-   docker compose exec app python -c "import duckdb; \
-   print(duckdb.connect('data/warehouse/edgeradar.duckdb').sql( \
-   'select source, count(*) n, count(implied_prob) with_prob from fact_market_quotes group by 1').to_df())"
-   ```
-   You should see rows for both `manifold` and `kalshi`.
-
-The gate is green when `make dbt` passes all tests and `fact_market_quotes`
-contains rows from both sources.
-
-## Verify the Phase 3 gate
-
-Phase 3 adds the Redpanda broker and a new dependency (`confluent-kafka`), so
-rebuild + restart once:
-
-```bash
-make down && make up          # now also starts redpanda + redpanda-console
-make ps                       # redpanda should be (healthy)
-```
-
-Then drive the streaming path (offline with --dry-run):
-
-1. **Produce** raw quotes to the topic:
-   ```bash
-   make produce SOURCE=all ARGS=--dry-run     # "produced 8 message(s)"
-   ```
-
-2. **Consume**, normalize, and land clean Parquet:
-   ```bash
-   make consume                               # "consumed 8 message(s) -> 5 quote(s)"
-   ```
-
-3. **Inspect** the stream in the browser at http://localhost:8080 (topic `quotes_raw`).
-
-4. **Idempotency:** run produce + consume again; the clean zone stays duplicate-free:
-   ```bash
-   docker compose exec app python -c "from edgeradar.storage import read_quotes; print(len(read_quotes()), 'unique quotes')"
-   ```
-
-5. **Tests:** `make test` → 12 passing.
-
-The gate is green when produce → consume lands clean quotes and reruns don't
-create duplicates. (For live data, drop `ARGS=--dry-run`.)
-
-## Verify the Phase 4 gate
-
-No rebuild needed (pure Python + dbt SQL). The run order is **land data → resolve
-→ dbt** (dbt's `dim_event` reads what `resolve` writes):
-
-1. **Land data** (if you haven't this session):
-   ```bash
-   make ingest SOURCE=all ARGS=--dry-run
-   ```
-
-2. **Resolve events** — group same-event markets across platforms:
-   ```bash
-   make resolve
-   ```
-   You should see `2 cross-platform` events, and a review list showing the NBA
-   pair (~0.98) and the NYC-temperature pair (~0.89) as `match`.
-
-3. **Build the warehouse** (now includes `dim_event`):
-   ```bash
-   make dbt
-   ```
-   Expect `PASS=39 ... ERROR=0`.
-
-4. **See the cross-platform prices line up:**
-   ```bash
-   docker compose exec app python -c "import duckdb; print(duckdb.connect('data/warehouse/edgeradar.duckdb').sql(\"select event_id, source, round(implied_prob,3) p, left(title,30) title from fact_quotes_with_event where event_id in (select event_id from dim_event where n_sources>1) order by event_id, source\").to_df())"
-   ```
-   Each cross-platform `event_id` shows one row per platform — e.g. the NBA event
-   at Kalshi 0.91 vs Manifold 0.88. That divergence is what Phase 5 will score.
-
-To **correct** a wrong match, add a row to `seeds/event_overrides.csv`
-(`match` or `block`) and re-run `make resolve`.
-
-The gate is green when the known cross-platform markets are grouped under shared
-`event_id`s, `make dbt` passes, and mismatches are reviewable via `make resolve`.
-
-## Verify the Phase 5 gate
-
-No rebuild needed. Run order: **land → resolve → weather → dbt**.
-
-```bash
-make ingest SOURCE=all ARGS=--dry-run
-make resolve
-make weather ARGS=--dry-run     # prints the NYC temp market as a SIGNAL (~+0.31)
-make dbt                        # expect PASS=47, ERROR=0
-```
-
-See the ranked signals:
-
-```bash
-docker compose exec app python -c "import duckdb; print(duckdb.connect('data/warehouse/edgeradar.duckdb').sql('select source, round(implied_prob,3) p, round(consensus,3) consensus, round(trade_cost,4) cost_, round(edge_net,3) edge_net, is_signal from mart_divergence').to_df())"
-docker compose exec app python -c "import duckdb; print(duckdb.connect('data/warehouse/edgeradar.duckdb').sql('select location, round(forecast_prob,3) fc, round(kalshi_prob,3) kalshi, round(edge_net,3) edge_net, is_signal from mart_weather_edge').to_df())"
-```
-
-The gate is green when `mart_divergence` and `mart_weather_edge` both produce
-ranked rows whose `edge_net` is net of `trade_cost`. (Live: drop `--dry-run` and
-ensure `NWS_USER_AGENT` in `.env` has your contact — NWS requires it.)
-
-## Verify the Phase 6 gate
-
-Phase 6 adds Dagster, so rebuild the image once:
-
-```bash
-make down && make up
-```
-
-Then run the full pipeline and score the signals:
-
-```bash
-make ingest SOURCE=all ARGS=--dry-run
-make resolve
-make weather ARGS=--dry-run
-make dbt                 # core marts (PASS=47); excludes the eval models
-make evaluate            # logs signals + scores them
-```
-
-`make evaluate` prints, for the logged signals: how many resolved, the **hit rate**,
-the **net PnL** over the tradeable (Kalshi) side, and a **calibration** table
-(predicted probability vs realized rate). On the sample data: 5 signals, all
-resolved, hit rate 0.6, net PnL ≈ +0.90 per contract.
-
-Optional — the orchestrated view and the dbt eval marts:
-
-```bash
-make dagster             # open http://localhost:3000, materialize the asset graph
-# or build the eval dbt tables directly:
-docker compose exec app sh -c "dbt build --select tag:eval --project-dir dbt --profiles-dir dbt"
-```
-
-The gate is green when, for past signals, you can see whether they would have been
-right (`hit`) and the edge net of fees (`pnl_net`, `mart_signal_scores`,
-`mart_calibration`).
-
-> Reality check: a handful of sample signals proves nothing — the calibration is
-> only meaningful across many real, resolved events. This phase exists precisely so
-> you don't fool yourself: trust the edge only once the numbers hold up at scale.
-
-## Verify the Phase 7 gate
-
-Phase 7 adds Streamlit, so rebuild once:
-
-```bash
-make down && make up
-```
-
-Make sure the warehouse is populated (Phases 1–6), then:
-
-1. **Dashboard:**
-   ```bash
-   make dashboard          # open http://localhost:8501
-   ```
-   Four tabs: divergence leaderboard, per-event prices, weather edge, and the
-   evaluation/calibration report. (Ctrl-C in the terminal to stop it.)
-
-2. **Alerter** — fire a test alert (prints instead of sending with `--dry-run`):
-   ```bash
-   make alert ARGS=--dry-run
-   ```
-   On the sample data this shows the NYC weather signal (~+0.31). To actually send
-   to Discord, put a webhook URL in `.env` as `DISCORD_WEBHOOK_URL` and run
-   `make alert` (no `--dry-run`).
-
-The gate is green when the dashboard renders the marts and a test alert fires.
-Everything here is read-only — the alerter refuses to run if `ENABLE_ORDER_EXECUTION`
-is ever set true.
-
-## Demo script (60–90 seconds)
-
-A walkthrough for showing the project end to end (offline, deterministic):
-
-1. **"It's a local, free, containerized data platform."** `make up` → show
-   `make ps` (MinIO + Redpanda healthy), open the MinIO console (9001) and Redpanda
-   Console (8080).
-2. **"Adapters ingest public markets through a Kafka stream."**
-   `make produce SOURCE=all ARGS=--dry-run` then `make consume` → show the
-   `quotes_raw` messages in Redpanda Console, then the clean Parquet that landed.
-3. **"dbt turns the lake into a tested warehouse."** `make dbt` → point out
-   `PASS=47`, and that `fact_market_quotes` unifies both platforms.
-4. **"Entity resolution finds the same event across platforms."** `make resolve`
-   → show the NBA + weather pairs grouped with confidence scores.
-5. **"The signal engine ranks mispricings net of fees, plus a weather edge."**
-   `make weather ARGS=--dry-run`; open the **dashboard** (`make dashboard`, 8501)
-   → divergence leaderboard, per-event prices, weather panel.
-6. **"And the honest core: we score signals against outcomes."** `make evaluate`
-   → hit rate, calibration, net PnL; open the dashboard's Evaluation tab.
-7. **"An alert notifies me — it never trades."** `make alert ARGS=--dry-run`.
-   Close on the read-only guardrail and [`FINDINGS.md`](FINDINGS.md): cost dominates,
-   so calibration — not a pretty number — is what decides if an edge is real.
-
-## Continuous integration
-
-Every push runs `.github/workflows/ci.yml`: `ruff` lint + format check, `pytest`,
-and a full `dbt build` (core + eval) on the sample dataset regenerated from the
-committed `--dry-run` fixtures. To run the same checks locally:
-
-```bash
-make lint && make test && \
-  make ingest SOURCE=all ARGS=--dry-run && make resolve && make weather ARGS=--dry-run && \
-  make dbt && make evaluate
-```
+Python 3.11 with [`uv`](https://docs.astral.sh/uv/) · Parquet data lake · DuckDB
+warehouse · dbt (dbt-duckdb) · Redpanda (Kafka-compatible streaming) · Dagster
+(orchestration) · Pydantic (typed contracts) · Streamlit (dashboard) · Docker
+Compose · ruff + pytest + GitHub Actions.
 
 ## Repository layout
 
 ```
-.
-├── docker-compose.yml      # MinIO + bucket init + app container
-├── Dockerfile              # uv-based Python app image
-├── Makefile                # make up / ingest / dbt / test / dashboard
-├── pyproject.toml          # deps + tooling (ruff, mypy, pytest)
-├── .env.example            # config template (copy to .env; .env is git-ignored)
-├── README.md
-├── ARCHITECTURE.md         # design decisions (read-only, entity resolution, fees)
-├── src/edgeradar/
-│   ├── config.py           # typed settings (single source of config)
-│   ├── models.py           # MarketQuote / RawRecord contracts + natural key
-│   ├── normalize.py        # price -> implied probability + vig removal
-│   ├── cli.py              # `edgeradar` CLI (version, config-check, ingest stub)
-│   └── adapters/
-│       └── base.py         # SourceAdapter interface (the key abstraction)
-├── tests/                  # one test per component; grows each phase
-├── sample_responses/       # saved API responses for --dry-run (committed)
-├── dbt/                    # dbt project (Phase 2)
-└── data/                   # local lake + DuckDB file (git-ignored)
+src/edgeradar/
+├── config.py            # typed settings (single source of config)
+├── models.py            # MarketQuote / RawRecord contracts + natural key
+├── normalize.py         # price → implied probability + vig removal
+├── fees.py              # Kalshi fee + spread cost model
+├── adapters/            # one SourceAdapter per venue (the key abstraction)
+├── streaming/           # producer / consumer / serde
+├── entity_resolution.py # cross-platform event matching (blocking + fuzzy + overrides)
+├── analytics.py         # confidence, uncertainty, edge decomposition, reliability
+├── quality.py           # data-quality / observability report
+├── weather.py           # NWS forecast → probability + sigma calibration
+├── evaluation.py        # signal logging, scoring, calibration, backfill
+├── alerter.py           # Discord notifier (read-only guardrail)
+├── orchestration/       # Dagster assets + job
+├── dashboard/app.py     # 7-page Streamlit product
+└── cli.py               # `edgeradar` CLI (ingest, resolve, evaluate, quality, doctor, …)
+dbt/                     # staging macro + marts + tests
+tests/                   # unit tests per component
+sample_responses/        # committed fixtures for the offline demo
 ```
+
+## Limitations (read these)
+
+- **Markets are efficient.** Most raw divergences vanish after fees; the system is
+  built to prove that to you, not to deny it.
+- **Cross-platform comparability is imperfect.** Two venues' "same" market can have
+  subtly different resolution criteria; entity resolution is fuzzy and supervised
+  by an override table, not perfect.
+- **Live signal evaluation is forward-accumulating.** A handful of resolved signals
+  proves nothing; trust calibration only at scale.
+- **The weather model is deliberately simple** (a calibrated Normal around the NWS
+  high) — a worked example of forecast-vs-market comparison, not a meteorology model.
+
+## Roadmap
+
+Embedding-based candidate generation for entity resolution (with the override
+table as the confirmation store) · more venues behind the same adapter interface ·
+a Postgres warehouse target for dbt · longer-horizon live signal calibration ·
+richer per-source reliability weighting in the consensus.
+
+## What this demonstrates
+
+Data engineering and streaming, fuzzy entity resolution, forecast evaluation and
+calibration, data-quality/observability practice, dashboard and product design,
+human-in-the-loop and responsible-by-design decision support, and software
+reliability (typed contracts, tests, CI, one-command reproducible demo).
 
 ## License
 

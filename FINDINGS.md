@@ -1,10 +1,13 @@
-# EdgeRadar — One Honest Finding
+# EdgeRadar — Honest Findings
 
-> Scope note: the numbers below are illustrative, drawn from the committed sample
-> dataset and the project's cost model — **not** from a large live backtest. The
-> point of EdgeRadar's evaluation layer (Phase 6) is precisely that you *cannot*
-> claim an edge until it survives scoring across many real, resolved events. This
-> write-up states a finding and is explicit about what would be needed to confirm it.
+> Scope note: except where a specific live sample size is stated (Finding 2 was
+> measured over 1,523 settled markets), the numbers below are illustrative — drawn
+> from the committed sample dataset and the project's cost model, **not** a large
+> live backtest. The point of EdgeRadar's evaluation layer is precisely that you
+> *cannot* claim an edge until it survives scoring across many real, resolved
+> events. Each finding is explicit about what would be needed to confirm it. This
+> file is the project's conscience: it exists so the dashboard's nice numbers never
+> get mistaken for proof.
 
 ## Finding: at retail size, trading cost — not mispricing — dominates cross-platform divergence
 

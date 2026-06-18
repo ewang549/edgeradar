@@ -452,6 +452,10 @@ def resolve(
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = str(out_dir / "event_map.parquet")
         event_map.to_parquet(out_path, index=False)
+        # Persist the scored candidate pairs too, so the dashboard's resolution
+        # workbench can show accepted matches AND near-miss reviews without rerunning.
+        if not candidate_pairs.empty:
+            candidate_pairs.to_parquet(out_dir / "candidate_pairs.parquet", index=False)
 
     return ResolveResult(
         event_map=event_map,
