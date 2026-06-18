@@ -65,6 +65,55 @@ def test_score_signals_hit_and_pnl(tmp_path, monkeypatch):
     assert scored.iloc[0]["hit"] == 1
 
 
+def test_auto_resolutions_are_merged_and_scored(tmp_path, monkeypatch):
+    # An auto-resolved outcome (data/marts/resolutions_auto.csv) should be picked up
+    # by scoring with no manual seed file involved.
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    from edgeradar.config import get_settings
+
+    get_settings.cache_clear()
+    _write_log(
+        tmp_path,
+        [
+            {
+                "signal_key": "k1",
+                "signal_type": "divergence",
+                "event_id": "e1",
+                "market_id": "AUTO1",
+                "source": "kalshi",
+                "side": "YES",
+                "platform_prob": 0.40,
+                "reference_prob": 0.80,
+                "predicted_prob_side": 0.80,
+                "edge_net": 0.30,
+                "trade_cost": 0.02,
+                "tradeable": True,
+                "signal_ts": "2026-06-17",
+                "title": "auto market",
+            }
+        ],
+    )
+    # Simulate what auto_resolve would have written (no network in the test).
+    marts = tmp_path / "marts"
+    marts.mkdir(parents=True, exist_ok=True)
+    (marts / "resolutions_auto.csv").write_text("market_id,outcome,source\nAUTO1,1,kalshi\n")
+
+    _, summary = score_signals(
+        data_root=str(tmp_path), resolutions_path=str(tmp_path / "nonexistent_seed.csv")
+    )
+    assert summary.n_resolved == 1  # picked up purely from the auto file
+    assert summary.hit_rate == 1.0
+
+
+def test_auto_resolve_dry_run_is_noop(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    from edgeradar.config import get_settings
+    from edgeradar.evaluation import auto_resolve
+
+    get_settings.cache_clear()
+    assert auto_resolve(data_root=str(tmp_path), dry_run=True) == (0, 0)
+
+
 def test_score_signals_no_resolutions_is_safe(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     from edgeradar.config import get_settings

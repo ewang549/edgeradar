@@ -156,15 +156,101 @@ def log_signals(*, data_root: str | None = None, duckdb_path: str | None = None)
     return combined
 
 
-def load_resolutions(path: str | Path = "seeds/resolutions.csv") -> pd.DataFrame:
-    """Read known outcomes: columns market_id, outcome (1=YES happened, 0=NO)."""
-    p = Path(path)
-    if not p.exists():
+RESOLUTIONS_AUTO_NAME = "resolutions_auto.csv"
+
+
+def load_resolutions(
+    path: str | Path = "seeds/resolutions.csv", *, data_root: str | None = None
+) -> pd.DataFrame:
+    """Known outcomes (market_id, outcome). Merges the manual seed file with the
+    auto-resolved outcomes (data/marts/resolutions_auto.csv); auto wins on conflict."""
+    frames = []
+    seed = Path(path)
+    if seed.exists():
+        frames.append(pd.read_csv(seed)[["market_id", "outcome"]])
+    auto = _marts_dir(data_root) / RESOLUTIONS_AUTO_NAME
+    if auto.exists():
+        frames.append(pd.read_csv(auto)[["market_id", "outcome"]])
+    if not frames:
         return pd.DataFrame(columns=["market_id", "outcome"])
-    df = pd.read_csv(p)
-    df = df[["market_id", "outcome"]].dropna()
+    df = pd.concat(frames, ignore_index=True).dropna()
     df["outcome"] = df["outcome"].astype(int)
-    return df
+    # auto file is appended last, so keep="last" lets it win over a stale seed row
+    return df.drop_duplicates(subset=["market_id"], keep="last")
+
+
+def _resolve_one(source: str, market_id: str) -> int | None:
+    """Fetch the settled outcome for one market (1=YES, 0=NO, None=not resolved yet)."""
+    import httpx
+
+    settings = get_settings()
+    try:
+        if source == "kalshi":
+            r = httpx.get(f"{settings.kalshi_api_base}/markets/{market_id}", timeout=20.0)
+            r.raise_for_status()
+            result = (r.json().get("market") or {}).get("result", "")
+            if result == "yes":
+                return 1
+            if result == "no":
+                return 0
+        elif source == "manifold":
+            r = httpx.get(f"{settings.manifold_api_base}/market/{market_id}", timeout=20.0)
+            r.raise_for_status()
+            m = r.json()
+            if m.get("isResolved") and m.get("resolution") in ("YES", "NO"):
+                return 1 if m["resolution"] == "YES" else 0
+    except (httpx.HTTPError, ValueError, KeyError):
+        return None
+    return None
+
+
+def auto_resolve(*, data_root: str | None = None, dry_run: bool = False) -> tuple[int, int]:
+    """Auto-fetch settled outcomes for logged signals from Kalshi + Manifold.
+
+    Appends newly-resolved (market_id, outcome) to data/marts/resolutions_auto.csv so
+    the evaluation loop needs no manual input. Returns (checked, newly_resolved).
+    Fail-soft: network errors for a market just leave it unresolved (retried next run).
+    """
+    out_dir = _marts_dir(data_root)
+    log_path = out_dir / SIGNAL_LOG_NAME
+    if dry_run or not log_path.exists():
+        return 0, 0
+
+    log = pd.read_parquet(log_path)
+    if log.empty or "source" not in log.columns:
+        return 0, 0
+
+    auto_path = out_dir / RESOLUTIONS_AUTO_NAME
+    already = set()
+    if auto_path.exists():
+        already = set(pd.read_csv(auto_path)["market_id"].astype(str))
+
+    # Only sources whose outcomes we can fetch directly.
+    todo = (
+        log[log["source"].isin(["kalshi", "manifold"])][["source", "market_id"]]
+        .drop_duplicates()
+        .to_dict("records")
+    )
+    checked, new_rows = 0, []
+    for row in todo:
+        mid = str(row["market_id"])
+        if mid in already:
+            continue
+        checked += 1
+        outcome = _resolve_one(row["source"], mid)
+        if outcome is not None:
+            new_rows.append({"market_id": mid, "outcome": outcome, "source": row["source"]})
+
+    if new_rows:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        new_df = pd.DataFrame(new_rows)
+        combined = (
+            pd.concat([pd.read_csv(auto_path), new_df], ignore_index=True)
+            if auto_path.exists()
+            else new_df
+        )
+        combined.drop_duplicates(subset=["market_id"], keep="last").to_csv(auto_path, index=False)
+    return checked, len(new_rows)
 
 
 @dataclass
@@ -196,7 +282,7 @@ def score_signals(
     log_path = out_dir / SIGNAL_LOG_NAME
     log = pd.read_parquet(log_path) if log_path.exists() else pd.DataFrame()
 
-    resolutions = load_resolutions(resolutions_path)
+    resolutions = load_resolutions(resolutions_path, data_root=data_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     scores_path = out_dir / SIGNAL_SCORES_NAME
 

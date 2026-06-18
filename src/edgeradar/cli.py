@@ -154,16 +154,31 @@ def _cmd_log_signals(_: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_evaluate(_: argparse.Namespace) -> int:
-    from edgeradar.evaluation import log_signals, score_signals
+def _cmd_auto_resolve(_: argparse.Namespace) -> int:
+    from edgeradar.evaluation import auto_resolve
+
+    checked, newly = auto_resolve()
+    print(
+        f"[auto-resolve] checked {checked} unresolved market(s); resolved {newly} new outcome(s)."
+    )
+    return 0
+
+
+def _cmd_evaluate(args: argparse.Namespace) -> int:
+    from edgeradar.evaluation import auto_resolve, log_signals, score_signals
 
     log_signals()
+    # Autonomously fetch settled outcomes from Kalshi + Manifold (unless --no-resolve).
+    if not getattr(args, "no_resolve", False):
+        checked, newly = auto_resolve()
+        if checked:
+            print(f"[evaluate] auto-resolved {newly} newly-settled market(s) of {checked} checked.")
     _, s = score_signals()
     print("[evaluate] signal scoring (honest backtest)")
     print(f"  signals logged       : {s.n_signals_logged}")
     print(f"  resolved & scored    : {s.n_resolved}")
     if s.n_resolved == 0:
-        print("  (no resolved outcomes yet — fill seeds/resolutions.csv as events settle.)")
+        print("  (no resolved outcomes yet — events haven't settled. They'll auto-resolve later.)")
         return 0
     print(f"  hit rate (all)       : {s.hit_rate}")
     print(f"  tradeable resolved   : {s.n_tradeable_resolved}")
@@ -237,10 +252,19 @@ def build_parser() -> argparse.ArgumentParser:
         "log-signals", help="Append currently-flagged signals to the signal_log (Phase 6)."
     ).set_defaults(func=_cmd_log_signals)
 
-    sub.add_parser(
+    p_eval = sub.add_parser(
         "evaluate",
-        help="Log signals + score them vs outcomes (hit rate, calibration, PnL) (Phase 6).",
-    ).set_defaults(func=_cmd_evaluate)
+        help="Auto-resolve outcomes + log signals + score them (hit rate, calibration, PnL).",
+    )
+    p_eval.add_argument(
+        "--no-resolve", action="store_true", help="Skip the auto-resolution network step."
+    )
+    p_eval.set_defaults(func=_cmd_evaluate)
+
+    sub.add_parser(
+        "auto-resolve",
+        help="Fetch settled outcomes from Kalshi + Manifold for logged signals (Phase 6).",
+    ).set_defaults(func=_cmd_auto_resolve)
 
     p_alert = sub.add_parser(
         "alert", help="Post above-threshold signals to Discord (read-only) (Phase 7)."
