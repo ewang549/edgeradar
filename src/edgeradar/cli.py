@@ -171,6 +171,15 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
             f"    bucket {b['prob_bucket']:.1f}: n={b['n']:<4} "
             f"predicted={b['predicted_mean']} realized={b['realized_rate']}"
         )
+    if s.by_group:
+        print("  by market type (longshot_overpricing >0 = cheap 'yes' overpriced):")
+        for g in s.by_group:
+            ls = g["longshot_overpricing"]
+            ls_str = f"{ls:+.3f}" if ls is not None else "n/a"
+            print(
+                f"    {g['group']:<8} n={g['n']:<5} acc={g['accuracy']:.1%} "
+                f"brier={g['brier']:.3f} longshot={ls_str}"
+            )
     return 0
 
 

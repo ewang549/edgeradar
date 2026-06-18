@@ -66,6 +66,45 @@ efficient: most divergence signals are fee-dominated noise, and the realistic pr
 a strong data-engineering portfolio project plus, at most, small edges in the corners
 (like well-modeled weather) — not riches.
 
+## Finding 2: Kalshi closing prices are well-calibrated, with a favorite-longshot bias
+
+`edgeradar backfill` scores already-settled Kalshi markets immediately — each settled
+binary market exposes its closing price (≈ implied probability) and its actual
+result, so calibration can be measured *now* instead of waiting for new signals to
+resolve. Over **1,523** settled markets in one pull:
+
+- **Brier score 0.067** — low, i.e. closing prices are well-calibrated overall.
+- **Favorite accuracy 91%** — but inflated by how lopsided the population is (most
+  markets resolve near 0 or 1), so this number alone is not meaningful.
+
+The calibration curve (closing price bucket → realized frequency) shows the real
+structure:
+
+| price bucket | predicted | realized |
+|---|---:|---:|
+| 0.1 | 0.095 | 0.010 |
+| 0.2 | 0.194 | 0.089 |
+| 0.3 | 0.294 | 0.168 |
+| 0.4 | 0.400 | 0.330 |
+| 0.5 | 0.495 | 0.547 |
+| 0.7 | 0.699 | 0.705 |
+| 0.9 | 0.898 | 0.846 |
+
+In the **low buckets (0.1–0.4) realized is consistently below predicted**: cheap
+"yes" contracts happened *less often* than their price implied — they're overpriced.
+The mid/high range is well-calibrated. This is the classic **favorite-longshot
+bias** (longshots are systematically too expensive), reproduced cleanly from live data.
+
+**Caveats (why this isn't a money printer):**
+- The settled feed is dominated by **high-frequency markets** (15-minute crypto,
+  sports combos); the bias may not transfer to the slower markets you'd actually
+  trade. The `backfill` per-market-type breakdown exists to check this.
+- It's measured at **closing price**, which can be thin/stale on low-volume markets.
+- Fading overpriced longshots means selling NO on cheap contracts; whether that
+  survives Kalshi fees, liquidity, and the bias *persisting* is a separate question
+  the PnL scorer (`make evaluate`) must answer. This is a calibration finding, not a
+  trade recommendation.
+
 ## Data-quality gotchas found on live data
 
 Running EdgeRadar against real APIs (rather than the tidy sample fixtures) surfaced

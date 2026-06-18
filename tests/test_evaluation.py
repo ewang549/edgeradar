@@ -117,9 +117,21 @@ def test_backfill_scores_settled_markets(tmp_path, monkeypatch):
     assert s.n_markets == 3
     assert 0.0 <= s.accuracy <= 1.0
     assert 0.0 <= s.brier <= 1.0
+    # per market-type breakdown is present (weather + sports in the fixture)
+    groups = {g["group"] for g in s.by_group}
+    assert {"weather", "sports"} <= groups
     # outcomes were written for auto-resolution
     auto = pd.read_csv(tmp_path / "marts" / "resolutions_auto.csv")
     assert "KXNBAGAME-26JUN17BOSLAL-BOS" in set(auto["market_id"])
+
+
+def test_market_group_classification():
+    from edgeradar.evaluation import market_group
+
+    assert market_group("KXBTC15M-26JUN181115-15") == "crypto"
+    assert market_group("KXNBAGAME-26JUN17BOSLAL-BOS") == "sports"
+    assert market_group("KXHIGHNY-26JUN17-B82.5") == "weather"
+    assert market_group("KXCPIYOY-26") == "other"
 
 
 def test_auto_resolve_dry_run_is_noop(tmp_path, monkeypatch):

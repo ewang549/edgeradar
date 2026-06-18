@@ -186,6 +186,39 @@ class BackfillSummary:
     accuracy: float | None  # fraction where the favored side (p>=0.5) was correct
     brier: float | None  # mean squared error of the closing price vs outcome
     calibration: list[dict] = field(default_factory=list)
+    by_group: list[dict] = field(default_factory=list)  # per market-type breakdown
+
+
+# Coarse market-type buckets, keyed off the Kalshi ticker prefix.
+_GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "crypto": ("BTC", "ETH", "DOGE", "XRP", "SOL", "ADA", "LTC", "CRYPTO"),
+    "sports": (
+        "NBA",
+        "MLB",
+        "NFL",
+        "NHL",
+        "WC",
+        "GAME",
+        "SOCCER",
+        "UFC",
+        "TENNIS",
+        "NCAA",
+        "EPL",
+        "NASCAR",
+        "GOLF",
+        "PGA",
+    ),
+    "weather": ("HIGH", "LOW", "TEMP", "WEATHER", "RAIN", "SNOW"),
+}
+
+
+def market_group(ticker: str) -> str:
+    """Coarse market type from a Kalshi ticker (crypto / sports / weather / other)."""
+    t = ticker.upper()
+    for group, keywords in _GROUP_KEYWORDS.items():
+        if any(k in t for k in keywords):
+            return group
+    return "other"
 
 
 def _fetch_settled_kalshi(pages: int, limit: int = 1000) -> list[dict]:
@@ -247,6 +280,7 @@ def backfill_kalshi_calibration(
             {
                 "ticker": str(m["ticker"]),
                 "title": m.get("title", ""),
+                "group": market_group(str(m["ticker"])),
                 "predicted": p,  # closing P(YES)
                 "outcome": 1 if result == "yes" else 0,
                 "close_time": m.get("close_time"),
@@ -256,7 +290,7 @@ def backfill_kalshi_calibration(
     df = pd.DataFrame(rows)
     out_dir = _marts_dir(data_root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    cols = ["ticker", "title", "predicted", "outcome", "close_time"]
+    cols = ["ticker", "title", "group", "predicted", "outcome", "close_time"]
     (df if not df.empty else pd.DataFrame(columns=cols)).to_parquet(
         out_dir / "market_calibration.parquet", index=False
     )
@@ -284,7 +318,31 @@ def backfill_kalshi_calibration(
         }
         for b, g in df.groupby("bucket")
     ]
-    return BackfillSummary(len(df), round(accuracy, 4), round(brier, 4), calib)
+
+    # Per market-type breakdown, incl. a "longshot overpricing" measure:
+    # mean(predicted - outcome) among cheap (<0.25) contracts. Positive => longshots
+    # were overpriced (favorite-longshot bias) in that group.
+    by_group = []
+    for grp, gd in df.groupby("group"):
+        acc = float((((gd["predicted"] >= 0.5).astype(int)) == gd["outcome"]).mean())
+        br = float(((gd["predicted"] - gd["outcome"]) ** 2).mean())
+        cheap = gd[gd["predicted"] < 0.25]
+        longshot = (
+            round(float((cheap["predicted"] - cheap["outcome"]).mean()), 4)
+            if len(cheap) >= 10
+            else None
+        )
+        by_group.append(
+            {
+                "group": grp,
+                "n": int(len(gd)),
+                "accuracy": round(acc, 4),
+                "brier": round(br, 4),
+                "longshot_overpricing": longshot,
+            }
+        )
+    by_group.sort(key=lambda d: d["n"], reverse=True)
+    return BackfillSummary(len(df), round(accuracy, 4), round(brier, 4), calib, by_group)
 
 
 def _resolve_one(source: str, market_id: str) -> tuple[int | None, str]:

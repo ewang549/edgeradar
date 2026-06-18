@@ -47,8 +47,14 @@ if "hit" in scores and len(scores):
 else:
     c3.metric("Hit rate (resolved)", "—")
 
-tab_div, tab_event, tab_wx, tab_eval = st.tabs(
-    ["Divergence leaderboard", "Per-event prices", "Weather edge", "Evaluation"]
+tab_div, tab_event, tab_wx, tab_eval, tab_cal = st.tabs(
+    [
+        "Divergence leaderboard",
+        "Per-event prices",
+        "Weather edge",
+        "Evaluation",
+        "Market calibration",
+    ]
 )
 
 with tab_div:
@@ -152,3 +158,56 @@ with tab_eval:
         )
     else:
         st.info("Run `make evaluate` to score logged signals against outcomes.")
+
+with tab_cal:
+    st.subheader("Market calibration — settled Kalshi markets (closing price vs reality)")
+    from pathlib import Path
+
+    cal_path = Path(get_settings().data_root) / "marts" / "market_calibration.parquet"
+    if not cal_path.exists():
+        st.info("Run `make backfill` to score already-settled markets and populate this.")
+    else:
+        mc = pd.read_parquet(cal_path)
+        if mc.empty:
+            st.info("No settled markets scored yet. Run `make backfill`.")
+        else:
+            brier = float(((mc["predicted"] - mc["outcome"]) ** 2).mean())
+            acc = float((((mc["predicted"] >= 0.5).astype(int)) == mc["outcome"]).mean())
+            m1, m2 = st.columns(2)
+            m1.metric("Markets scored", len(mc))
+            m2.metric("Brier (lower=better)", f"{brier:.3f}")
+            st.caption(f"Favorite accuracy: {acc:.1%}")
+
+            mc = mc.copy()
+            mc["bucket"] = (mc["predicted"] * 10).round() / 10
+            curve = (
+                mc.groupby("bucket")
+                .agg(
+                    n=("outcome", "size"),
+                    predicted=("predicted", "mean"),
+                    realized=("outcome", "mean"),
+                )
+                .reset_index()
+            )
+            st.markdown("**Calibration curve** (predicted vs realized; equal = well-calibrated)")
+            st.line_chart(curve.set_index("bucket")[["predicted", "realized"]])
+
+            st.markdown(
+                "**By market type** (realized < predicted in cheap buckets = longshot bias)"
+            )
+            grp = (
+                mc.groupby("group")
+                .agg(
+                    n=("outcome", "size"),
+                    brier=(
+                        "predicted",
+                        lambda s: float(((s - mc.loc[s.index, "outcome"]) ** 2).mean()),
+                    ),
+                )
+                .reset_index()
+            )
+            st.dataframe(grp, use_container_width=True, hide_index=True)
+            st.caption(
+                "Read-only analysis. A favorite-longshot bias is a known market "
+                "effect, not a guaranteed edge."
+            )
