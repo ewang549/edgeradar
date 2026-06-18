@@ -70,6 +70,9 @@ reset:  ## Wipe ALL local data (lake + warehouse + signal log) for a clean live-
 	@echo "Wiped all local data. Run 'make refresh' to repopulate with live data only."
 
 refresh:  ## ONE COMMAND: pull live data (all sources), rebuild warehouse, score signals
+	# Start from a clean quote lake each run so stale/dry-run partitions can never
+	# accumulate. The signal_log + auto-resolutions in data/marts are preserved.
+	$(APP_EXEC) sh -c "rm -rf data/clean data/raw"
 	$(APP_EXEC) edgeradar ingest --source all
 	$(APP_EXEC) edgeradar weather
 	$(APP_EXEC) edgeradar resolve
