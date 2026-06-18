@@ -8,7 +8,7 @@ SHELL := /bin/bash
 # Run a command inside the app container.
 APP_EXEC := docker compose exec app
 
-.PHONY: help up down logs ps console install lint test config-check ingest produce consume resolve weather evaluate alert refresh notify dagster dbt dbt-test dashboard
+.PHONY: help up down logs ps console install lint test config-check ingest produce consume resolve weather evaluate alert reset refresh notify dagster dbt dbt-test dashboard
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -64,6 +64,10 @@ evaluate:  ## Log signals + score vs outcomes; build eval dbt marts (Phase 6)
 
 alert:  ## Fire Discord alerts for above-threshold signals (read-only). ARGS=--dry-run to preview
 	$(APP_EXEC) edgeradar alert $(ARGS)
+
+reset:  ## Wipe ALL local data (lake + warehouse + signal log) for a clean live-only start
+	$(APP_EXEC) sh -c "rm -rf data/clean data/raw data/marts data/warehouse && mkdir -p data/warehouse"
+	@echo "Wiped all local data. Run 'make refresh' to repopulate with live data only."
 
 refresh:  ## ONE COMMAND: pull live data (all sources), rebuild warehouse, score signals
 	$(APP_EXEC) edgeradar ingest --source all
