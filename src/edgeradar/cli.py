@@ -154,10 +154,10 @@ def _cmd_log_signals(_: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_auto_resolve(_: argparse.Namespace) -> int:
+def _cmd_auto_resolve(args: argparse.Namespace) -> int:
     from edgeradar.evaluation import auto_resolve
 
-    checked, newly = auto_resolve()
+    checked, newly = auto_resolve(verbose=getattr(args, "verbose", False))
     print(
         f"[auto-resolve] checked {checked} unresolved market(s); resolved {newly} new outcome(s)."
     )
@@ -261,10 +261,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_eval.set_defaults(func=_cmd_evaluate)
 
-    sub.add_parser(
+    p_ar = sub.add_parser(
         "auto-resolve",
         help="Fetch settled outcomes from Kalshi + Manifold for logged signals (Phase 6).",
-    ).set_defaults(func=_cmd_auto_resolve)
+    )
+    p_ar.add_argument(
+        "--verbose", action="store_true", help="Print why each market did/didn't resolve."
+    )
+    p_ar.set_defaults(func=_cmd_auto_resolve)
 
     p_alert = sub.add_parser(
         "alert", help="Post above-threshold signals to Discord (read-only) (Phase 7)."

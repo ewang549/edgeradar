@@ -179,32 +179,43 @@ def load_resolutions(
     return df.drop_duplicates(subset=["market_id"], keep="last")
 
 
-def _resolve_one(source: str, market_id: str) -> int | None:
-    """Fetch the settled outcome for one market (1=YES, 0=NO, None=not resolved yet)."""
+def _resolve_one(source: str, market_id: str) -> tuple[int | None, str]:
+    """Fetch the settled outcome for one market.
+
+    Returns (outcome, detail) where outcome is 1=YES, 0=NO, or None if not resolved.
+    `detail` is a short human-readable reason (for diagnostics).
+    """
     import httpx
 
     settings = get_settings()
     try:
         if source == "kalshi":
             r = httpx.get(f"{settings.kalshi_api_base}/markets/{market_id}", timeout=20.0)
-            r.raise_for_status()
-            result = (r.json().get("market") or {}).get("result", "")
+            if r.status_code != 200:
+                return None, f"http {r.status_code}"
+            mkt = r.json().get("market") or {}
+            result, status = mkt.get("result", ""), mkt.get("status", "")
             if result == "yes":
-                return 1
+                return 1, "settled yes"
             if result == "no":
-                return 0
+                return 0, "settled no"
+            return None, f"not settled (status={status!r}, result={result!r})"
         elif source == "manifold":
             r = httpx.get(f"{settings.manifold_api_base}/market/{market_id}", timeout=20.0)
-            r.raise_for_status()
+            if r.status_code != 200:
+                return None, f"http {r.status_code}"
             m = r.json()
             if m.get("isResolved") and m.get("resolution") in ("YES", "NO"):
-                return 1 if m["resolution"] == "YES" else 0
-    except (httpx.HTTPError, ValueError, KeyError):
-        return None
-    return None
+                return (1 if m["resolution"] == "YES" else 0), f"resolved {m['resolution']}"
+            return None, f"not resolved (resolution={m.get('resolution')!r})"
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        return None, f"error: {type(exc).__name__}"
+    return None, "unsupported source"
 
 
-def auto_resolve(*, data_root: str | None = None, dry_run: bool = False) -> tuple[int, int]:
+def auto_resolve(
+    *, data_root: str | None = None, dry_run: bool = False, verbose: bool = False
+) -> tuple[int, int]:
     """Auto-fetch settled outcomes for logged signals from Kalshi + Manifold.
 
     Appends newly-resolved (market_id, outcome) to data/marts/resolutions_auto.csv so
@@ -237,7 +248,9 @@ def auto_resolve(*, data_root: str | None = None, dry_run: bool = False) -> tupl
         if mid in already:
             continue
         checked += 1
-        outcome = _resolve_one(row["source"], mid)
+        outcome, detail = _resolve_one(row["source"], mid)
+        if verbose:
+            print(f"    {row['source']}:{mid} -> {detail}")
         if outcome is not None:
             new_rows.append({"market_id": mid, "outcome": outcome, "source": row["source"]})
 
