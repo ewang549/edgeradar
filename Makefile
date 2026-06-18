@@ -8,7 +8,7 @@ SHELL := /bin/bash
 # Run a command inside the app container.
 APP_EXEC := docker compose exec app
 
-.PHONY: help up down logs ps console install lint test config-check ingest produce consume resolve weather evaluate alert reset refresh notify dagster dbt dbt-test dashboard
+.PHONY: help up down logs ps console install lint test config-check ingest produce consume resolve weather evaluate backfill alert reset refresh notify dagster dbt dbt-test dashboard
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -61,6 +61,9 @@ weather:  ## Weather edge: NWS forecast vs Kalshi temp markets. Usage: make weat
 evaluate:  ## Log signals + score vs outcomes; build eval dbt marts (Phase 6)
 	$(APP_EXEC) edgeradar evaluate
 	$(APP_EXEC) sh -c "dbt build --select tag:eval --project-dir dbt --profiles-dir dbt"
+
+backfill:  ## Instant calibration: score already-settled Kalshi markets now (Phase 6)
+	$(APP_EXEC) edgeradar backfill $(ARGS)
 
 alert:  ## Fire Discord alerts for above-threshold signals (read-only). ARGS=--dry-run to preview
 	$(APP_EXEC) edgeradar alert $(ARGS)

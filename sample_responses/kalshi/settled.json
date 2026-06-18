@@ -1,0 +1,45 @@
+{
+  "cursor": "",
+  "markets": [
+    {
+      "ticker": "KXHIGHNY-26JUN17-B82.5",
+      "market_type": "binary",
+      "title": "Will the high temperature in NYC on Jun 17 be above 82.5F?",
+      "status": "finalized",
+      "result": "no",
+      "last_price_dollars": "0.4600",
+      "close_time": "2026-06-17T23:59:00Z",
+      "volume_fp": "12000.00"
+    },
+    {
+      "ticker": "KXNBAGAME-26JUN17BOSLAL-BOS",
+      "market_type": "binary",
+      "title": "Will the Boston Celtics beat the Los Angeles Lakers on Jun 17?",
+      "status": "finalized",
+      "result": "yes",
+      "last_price_dollars": "0.9100",
+      "close_time": "2026-06-18T03:30:00Z",
+      "volume_fp": "54000.00"
+    },
+    {
+      "ticker": "KXMLB-26JUN17NYYBOS-NYY",
+      "market_type": "binary",
+      "title": "Will the New York Yankees beat the Boston Red Sox on Jun 17?",
+      "status": "finalized",
+      "result": "no",
+      "last_price_dollars": "0.5500",
+      "close_time": "2026-06-17T23:10:00Z",
+      "volume_fp": "8000.00"
+    },
+    {
+      "ticker": "KXLOWLIQ-26JUN17-EX",
+      "market_type": "binary",
+      "title": "Illiquid settled market (no volume -> excluded)",
+      "status": "finalized",
+      "result": "yes",
+      "last_price_dollars": "0.0000",
+      "close_time": "2026-06-17T23:59:00Z",
+      "volume_fp": "0.00"
+    }
+  ]
+}

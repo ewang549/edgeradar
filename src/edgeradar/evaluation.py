@@ -24,6 +24,7 @@ acting before the numbers hold up across many events.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -177,6 +178,113 @@ def load_resolutions(
     df["outcome"] = df["outcome"].astype(int)
     # auto file is appended last, so keep="last" lets it win over a stale seed row
     return df.drop_duplicates(subset=["market_id"], keep="last")
+
+
+@dataclass
+class BackfillSummary:
+    n_markets: int
+    accuracy: float | None  # fraction where the favored side (p>=0.5) was correct
+    brier: float | None  # mean squared error of the closing price vs outcome
+    calibration: list[dict] = field(default_factory=list)
+
+
+def _fetch_settled_kalshi(pages: int, limit: int = 1000) -> list[dict]:
+    """Page through Kalshi's settled-markets feed (most recent first)."""
+    import httpx
+
+    settings = get_settings()
+    url = f"{settings.kalshi_api_base}/markets"
+    out: list[dict] = []
+    cursor = None
+    for _ in range(max(1, pages)):
+        params = {"status": "settled", "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            r = httpx.get(url, params=params, timeout=30.0)
+            r.raise_for_status()
+            j = r.json()
+        except (httpx.HTTPError, ValueError):
+            break
+        out.extend(j.get("markets", []))
+        cursor = j.get("cursor")
+        if not cursor:
+            break
+    return out
+
+
+def backfill_kalshi_calibration(
+    *, pages: int = 5, dry_run: bool = False, data_root: str | None = None
+) -> BackfillSummary:
+    """Score ALREADY-settled Kalshi markets immediately (no waiting for new events).
+
+    Each settled binary market exposes its closing price (last_price_dollars ~ the
+    market's implied probability) and its actual result, so we can measure calibration
+    right now over a whole day of resolved markets. Also appends the outcomes to
+    resolutions_auto.csv so any of our own logged signals on those tickers get scored.
+    """
+    if dry_run:
+        sample = Path("sample_responses/kalshi/settled.json")
+        markets = json.loads(sample.read_text()).get("markets", [])
+    else:
+        markets = _fetch_settled_kalshi(pages)
+
+    rows = []
+    for m in markets:
+        if m.get("market_type") != "binary":
+            continue
+        result = m.get("result")
+        if result not in ("yes", "no"):
+            continue
+        try:
+            p = float(m.get("last_price_dollars"))
+            vol = float(m.get("volume_fp", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if not (0.0 < p < 1.0) or vol <= 0:  # skip illiquid / degenerate combos
+            continue
+        rows.append(
+            {
+                "ticker": str(m["ticker"]),
+                "title": m.get("title", ""),
+                "predicted": p,  # closing P(YES)
+                "outcome": 1 if result == "yes" else 0,
+                "close_time": m.get("close_time"),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    out_dir = _marts_dir(data_root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cols = ["ticker", "title", "predicted", "outcome", "close_time"]
+    (df if not df.empty else pd.DataFrame(columns=cols)).to_parquet(
+        out_dir / "market_calibration.parquet", index=False
+    )
+
+    if df.empty:
+        return BackfillSummary(0, None, None, [])
+
+    # Also feed these real outcomes into the auto-resolution store.
+    auto_path = out_dir / RESOLUTIONS_AUTO_NAME
+    res = df.rename(columns={"ticker": "market_id"})[["market_id", "outcome"]].copy()
+    res["source"] = "kalshi"
+    if auto_path.exists():
+        res = pd.concat([pd.read_csv(auto_path), res], ignore_index=True)
+    res.drop_duplicates(subset=["market_id"], keep="last").to_csv(auto_path, index=False)
+
+    accuracy = float((((df["predicted"] >= 0.5).astype(int)) == df["outcome"]).mean())
+    brier = float(((df["predicted"] - df["outcome"]) ** 2).mean())
+    df["bucket"] = (df["predicted"] * 10).round() / 10
+    calib = [
+        {
+            "prob_bucket": float(b),
+            "n": int(len(g)),
+            "predicted_mean": round(float(g["predicted"].mean()), 4),
+            "realized_rate": round(float(g["outcome"].mean()), 4),
+        }
+        for b, g in df.groupby("bucket")
+    ]
+    return BackfillSummary(len(df), round(accuracy, 4), round(brier, 4), calib)
 
 
 def _resolve_one(source: str, market_id: str) -> tuple[int | None, str]:

@@ -105,6 +105,23 @@ def test_auto_resolutions_are_merged_and_scored(tmp_path, monkeypatch):
     assert summary.hit_rate == 1.0
 
 
+def test_backfill_scores_settled_markets(tmp_path, monkeypatch):
+    # Backfill should score the 3 liquid settled markets in the fixture (the 0-volume
+    # one is excluded) and write outcomes into resolutions_auto.csv.
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    from edgeradar.config import get_settings
+    from edgeradar.evaluation import backfill_kalshi_calibration
+
+    get_settings.cache_clear()
+    s = backfill_kalshi_calibration(dry_run=True, data_root=str(tmp_path))
+    assert s.n_markets == 3
+    assert 0.0 <= s.accuracy <= 1.0
+    assert 0.0 <= s.brier <= 1.0
+    # outcomes were written for auto-resolution
+    auto = pd.read_csv(tmp_path / "marts" / "resolutions_auto.csv")
+    assert "KXNBAGAME-26JUN17BOSLAL-BOS" in set(auto["market_id"])
+
+
 def test_auto_resolve_dry_run_is_noop(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     from edgeradar.config import get_settings

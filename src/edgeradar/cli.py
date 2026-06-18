@@ -154,6 +154,26 @@ def _cmd_log_signals(_: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_backfill(args: argparse.Namespace) -> int:
+    from edgeradar.evaluation import backfill_kalshi_calibration
+
+    print("[backfill] scoring already-settled Kalshi markets (instant calibration)...")
+    s = backfill_kalshi_calibration(pages=args.pages, dry_run=args.dry_run)
+    print(f"  settled markets scored : {s.n_markets}")
+    if s.n_markets == 0:
+        print("  (no settled markets returned — try more --pages, or check connectivity.)")
+        return 0
+    print(f"  accuracy (favorite)    : {s.accuracy:.1%}")
+    print(f"  Brier score (lower=better): {s.brier}")
+    print("  calibration (closing price -> realized):")
+    for b in s.calibration:
+        print(
+            f"    bucket {b['prob_bucket']:.1f}: n={b['n']:<4} "
+            f"predicted={b['predicted_mean']} realized={b['realized_rate']}"
+        )
+    return 0
+
+
 def _cmd_auto_resolve(args: argparse.Namespace) -> int:
     from edgeradar.evaluation import auto_resolve
 
@@ -260,6 +280,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-resolve", action="store_true", help="Skip the auto-resolution network step."
     )
     p_eval.set_defaults(func=_cmd_evaluate)
+
+    p_bf = sub.add_parser(
+        "backfill",
+        help="Score already-settled Kalshi markets now for instant calibration (Phase 6).",
+    )
+    p_bf.add_argument("--pages", type=int, default=5, help="Pages of settled markets to pull.")
+    p_bf.add_argument("--dry-run", action="store_true", help="Use saved sample settled markets.")
+    p_bf.set_defaults(func=_cmd_backfill)
 
     p_ar = sub.add_parser(
         "auto-resolve",
