@@ -320,6 +320,27 @@ def _cmd_doctor(_: argparse.Namespace) -> int:
         else:
             print(f"{warn} {tool} not on PATH (needed for: {why})")
 
+    # Kalshi ingestion knobs (informational — combo-market exclusion is always
+    # on; these just control how hard a "pull everything" run tries).
+    try:
+        s = get_settings()
+        print(
+            f"{ok} kalshi_max_pages={s.kalshi_max_pages}, "
+            f"kalshi_min_liquidity_dollars={s.kalshi_min_liquidity_dollars} "
+            "(see --categories for targeted ingestion instead)"
+        )
+    except Exception:  # noqa: BLE001 - settings already validated above
+        pass
+
+    # Optional embedding-based entity resolution (NOT required; std-lib matcher
+    # is the default and what CI runs).
+    try:
+        import sentence_transformers  # noqa: F401
+
+        print(f"{ok} sentence-transformers installed (resolve(use_embeddings=True) available)")
+    except ImportError:
+        print(f"{warn} sentence-transformers not installed (optional extra: edgeradar[embeddings])")
+
     # Sample data for the offline path.
     sample_dir = root / "sample_responses"
     samples = list(sample_dir.glob("**/*.json")) if sample_dir.exists() else []

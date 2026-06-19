@@ -485,21 +485,23 @@ def page_source_health() -> None:
 
     grade_emoji = {"A": "🟢", "B": "🟢", "C": "🟡", "D": "🟠", "F": "🔴"}
     show = q.assign(grade=q["reliability_grade"].map(lambda g: f"{grade_emoji.get(g, '⚪')} {g}"))
+    wanted = [
+        "source",
+        "grade",
+        "reliability_score",
+        "n_quotes",
+        "n_markets",
+        "age_minutes",
+        "null_rate",
+        "duplicate_rate",
+        "prob_violations",
+        "stale_price_rate",
+        "combo_excluded_rate",
+        "issues",
+    ]
+    cols = [c for c in wanted if c in show]
     st.dataframe(
-        show[
-            [
-                "source",
-                "grade",
-                "reliability_score",
-                "n_quotes",
-                "n_markets",
-                "age_minutes",
-                "null_rate",
-                "duplicate_rate",
-                "prob_violations",
-                "issues",
-            ]
-        ],
+        show[cols],
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -509,7 +511,14 @@ def page_source_health() -> None:
             "age_minutes": st.column_config.NumberColumn("age (min)", format="%.0f"),
             "null_rate": st.column_config.NumberColumn(format="%.2f"),
             "duplicate_rate": st.column_config.NumberColumn(format="%.2f"),
+            "stale_price_rate": st.column_config.NumberColumn("stale price %", format="%.2f"),
+            "combo_excluded_rate": st.column_config.NumberColumn("combo excluded %", format="%.2f"),
         },
+    )
+    st.caption(
+        "Stale price % = quotes using a flagged fallback price instead of a live "
+        "two-sided quote. Combo excluded % = raw payloads dropped because they were "
+        "Kalshi MVE combo/parlay baskets, not single-outcome markets (see FINDINGS.md)."
     )
     if "generated_at" in q and len(q):
         ts = pd.to_datetime(q["generated_at"].iloc[0], utc=True, errors="coerce")
