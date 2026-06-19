@@ -9,8 +9,10 @@ from __future__ import annotations
 import pytest
 
 from edgeradar.entity_resolution import (
+    extract_entities,
     guess_category,
     resolve,
+    subject_tokens,
     title_similarity,
     tokenize,
 )
@@ -202,3 +204,189 @@ def test_opposite_game_sides_not_merged(tmp_path, monkeypatch):
     assert ev["CELT"] == ev["CELT2"]
     # ...but the "Lakers win" market is a separate event.
     assert ev["LAL"] != ev["CELT"]
+
+
+# --------------------------------------------------------------------------- #
+# Task 3: alias normalization + entity sub-blocking
+# --------------------------------------------------------------------------- #
+
+
+def test_alias_normalization_collapses_country_synonyms():
+    # "USA" and "United States" must tokenize to the same canonical entity so
+    # title_similarity treats them as identical, not merely similar.
+    assert tokenize("Will the USA win the 2026 World Cup?") == tokenize(
+        "Will the United States win the 2026 World Cup?"
+    )
+    assert "united_states" in tokenize("Will USA win?")
+    assert "bitcoin" in tokenize("Will BTC hit $100k?")
+
+
+def test_extract_entities_recognizes_countries_cities_and_tickers():
+    assert extract_entities("Will Brazil win the 2026 World Cup?") == frozenset({"brazil"})
+    assert extract_entities("Will the USA win the 2026 World Cup?") == frozenset({"united_states"})
+    assert extract_entities("Will BTC hit $100k?") == frozenset({"bitcoin"})
+    # A team/ticker our small gazetteer doesn't know about -> no entity (a
+    # documented blocking trade-off, not a crash).
+    assert extract_entities("Will the Zorbinaut Quasars win the cup?") == frozenset()
+
+
+def test_subject_tokens_generalizes_beyond_win_words():
+    # The old implementation only fired on "beat"/"win"-style words; it must also
+    # separate "be"-templated subjects (candidates, countries) from their predicate.
+    assert subject_tokens("Will Dwayne 'The Rock' Johnson be the 2028 nominee?") == frozenset(
+        {"dwayne", "rock", "johnson"}
+    )
+    assert subject_tokens("Will Türkiye finish last in Group D?") == frozenset({"türkiye"})
+    # "of" is captured as part of the proper-noun span but dropped as a stopword.
+    assert subject_tokens("Will the Democratic Republic of Congo win Group K?") == frozenset(
+        {"democratic", "republic", "congo"}
+    )
+    # No capitalized subject (e.g. weather) -> no constraint.
+    assert subject_tokens("Will the high temperature be above 90F?") is None
+
+
+def test_different_countries_with_templated_titles_stay_separate(tmp_path, monkeypatch):
+    # Regression for a real bug found on live World Cup data: near-identical
+    # boilerplate titles for DIFFERENT countries (sharing every token except the
+    # country name) must never merge, even transitively through a third, fully
+    # generic "bridge" market that has neither a recognized entity nor a subject.
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from edgeradar.models import MarketQuote
+    from edgeradar.storage import write_quotes_grouped
+
+    ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    quotes = [
+        MarketQuote(
+            source="kalshi",
+            market_id="BOS",
+            outcome="YES",
+            title="Will Bosnia and Herzegovina be the highest-scoring team in Group F?",
+            price=Decimal("0.10"),
+            implied_prob=0.10,
+            fee_adj_prob=0.10,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="polymarket",
+            market_id="ARG",
+            outcome="YES",
+            title="Will Argentina be the highest-scoring team in Group J?",
+            price=Decimal("0.30"),
+            implied_prob=0.30,
+            fee_adj_prob=0.30,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="manifold",
+            market_id="BRIDGE",
+            outcome="YES",
+            title="Will every team score a goal at the 2026 FIFA World Cup?",
+            price=Decimal("0.50"),
+            implied_prob=0.50,
+            fee_adj_prob=0.50,
+            snapshot_ts=ts,
+        ),
+    ]
+    write_quotes_grouped(quotes, data_root=str(tmp_path))
+    ev = resolve(data_root=str(tmp_path), write=False).event_map.set_index("market_id")["event_id"]
+    assert ev["BOS"] != ev["ARG"]
+    assert ev["BOS"] != ev["BRIDGE"]
+    assert ev["ARG"] != ev["BRIDGE"]
+
+
+def test_same_country_different_platforms_still_merge(tmp_path, monkeypatch):
+    # The entity guard must not be so strict that it blocks the legitimate case:
+    # the SAME country, worded differently ("USA" vs "United States") across
+    # platforms, for the SAME underlying question.
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from edgeradar.models import MarketQuote
+    from edgeradar.storage import write_quotes_grouped
+
+    ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    quotes = [
+        MarketQuote(
+            source="kalshi",
+            market_id="USA1",
+            outcome="YES",
+            title="Will the USA win the 2026 Men's World Cup?",
+            price=Decimal("0.12"),
+            implied_prob=0.12,
+            fee_adj_prob=0.12,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="manifold",
+            market_id="USA2",
+            outcome="YES",
+            title="Will the United States win the 2026 FIFA World Cup?",
+            price=Decimal("0.13"),
+            implied_prob=0.13,
+            fee_adj_prob=0.13,
+            snapshot_ts=ts,
+        ),
+    ]
+    write_quotes_grouped(quotes, data_root=str(tmp_path))
+    ev = resolve(data_root=str(tmp_path), write=False).event_map.set_index("market_id")["event_id"]
+    assert ev["USA1"] == ev["USA2"]
+
+
+def test_manual_override_works_across_entity_subblocks(tmp_path, monkeypatch):
+    # A human override must win even for a pair sub-blocking would never compare
+    # (different/no recognized entities) — overrides aren't subject to the
+    # automatic blocking trade-off.
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from edgeradar.models import MarketQuote
+    from edgeradar.storage import write_quotes_grouped
+
+    ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    quotes = [
+        MarketQuote(
+            source="kalshi",
+            market_id="ZORB",
+            outcome="YES",
+            title="Will the Zorbinaut Quasars win the championship?",
+            price=Decimal("0.40"),
+            implied_prob=0.40,
+            fee_adj_prob=0.40,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="manifold",
+            market_id="QUAS",
+            outcome="YES",
+            title="Quasars to win the title this season",
+            price=Decimal("0.42"),
+            implied_prob=0.42,
+            fee_adj_prob=0.42,
+            snapshot_ts=ts,
+        ),
+    ]
+    write_quotes_grouped(quotes, data_root=str(tmp_path))
+    override = tmp_path / "ov.csv"
+    override.write_text(
+        "source_a,market_id_a,source_b,market_id_b,relation\nkalshi,ZORB,manifold,QUAS,match\n"
+    )
+    res = resolve(data_root=str(tmp_path), overrides_path=str(override), write=False)
+    ev = res.event_map.set_index("market_id")["event_id"]
+    assert ev["ZORB"] == ev["QUAS"]
+    assert res.overrides_applied >= 1
+
+
+def test_embedding_layer_is_fail_soft_without_optional_dependency(landed, capsys):
+    # sentence-transformers is NOT a dev/CI dependency by design (see pyproject's
+    # `embeddings` extra) — `use_embeddings=True` must degrade to a no-op, not crash.
+    from edgeradar.entity_resolution import embedding_candidate_pairs
+
+    assert embedding_candidate_pairs([{"source": "a", "market_id": "1", "title": "x"}]) == []
+    out = capsys.readouterr().out
+    assert "sentence-transformers not installed" in out
+
+    res = resolve(data_root=landed, write=False, use_embeddings=True)
+    # Falls back to exactly the std-lib-only result: same cross-platform count.
+    assert res.n_cross_platform == 2

@@ -31,6 +31,14 @@ dev = [
     "dagster>=1.8",           # asset-based orchestration (Phase 6)
     "dagster-webserver>=1.8", # Dagster UI (`make dagster`)
 ]
+# Optional, NOT installed by default or in CI: embedding-based candidate
+# generation for entity resolution (`resolve(use_embeddings=True)`). The
+# std-lib fuzzy matcher remains the default matcher either way; this just adds
+# a pluggable layer that proposes extra candidate pairs for it to confirm. See
+# entity_resolution.embedding_candidate_pairs.
+embeddings = [
+    "sentence-transformers>=2.7",
+]
 
 [project.scripts]
 # Thin CLI entrypoint; subcommands get fleshed out in Phase 1.
