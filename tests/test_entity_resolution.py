@@ -378,6 +378,82 @@ def test_manual_override_works_across_entity_subblocks(tmp_path, monkeypatch):
     assert res.overrides_applied >= 1
 
 
+def test_same_subject_different_propositions_stay_separate(tmp_path, monkeypatch):
+    # Regression for a real bug found on live World Cup prop-market data: a
+    # single country is the subject of MANY genuinely different propositions
+    # ("win the cup" vs "win their group" vs "reach the quarterfinals" vs "go
+    # unbeaten") that share heavy boilerplate. Without a predicate check these
+    # all collapsed into one false event for that country.
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from edgeradar.models import MarketQuote
+    from edgeradar.storage import write_quotes_grouped
+
+    ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    quotes = [
+        MarketQuote(
+            source="kalshi",
+            market_id="WIN_CUP",
+            outcome="YES",
+            title="Will Argentina win the 2026 FIFA World Cup?",
+            price=Decimal("0.12"),
+            implied_prob=0.12,
+            fee_adj_prob=0.12,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="manifold",
+            market_id="WIN_CUP2",
+            outcome="YES",
+            title="Will the Argentina win the 2026 Men's World Cup?",
+            price=Decimal("0.11"),
+            implied_prob=0.11,
+            fee_adj_prob=0.11,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="polymarket",
+            market_id="WIN_GROUP",
+            outcome="YES",
+            title="Will Argentina win Group J in the 2026 FIFA World Cup?",
+            price=Decimal("0.85"),
+            implied_prob=0.85,
+            fee_adj_prob=0.85,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="polymarket",
+            market_id="REACH_QF",
+            outcome="YES",
+            title="Will Argentina reach the Quarterfinals at the 2026 FIFA World Cup?",
+            price=Decimal("0.59"),
+            implied_prob=0.59,
+            fee_adj_prob=0.59,
+            snapshot_ts=ts,
+        ),
+        MarketQuote(
+            source="polymarket",
+            market_id="UNBEATEN",
+            outcome="YES",
+            title="Will Argentina go unbeaten in the 2026 FIFA World Cup Group Stage?",
+            price=Decimal("0.79"),
+            implied_prob=0.79,
+            fee_adj_prob=0.79,
+            snapshot_ts=ts,
+        ),
+    ]
+    write_quotes_grouped(quotes, data_root=str(tmp_path))
+    ev = resolve(data_root=str(tmp_path), write=False).event_map.set_index("market_id")["event_id"]
+    # The two "win the cup outright" markets (different platforms) correctly merge...
+    assert ev["WIN_CUP"] == ev["WIN_CUP2"]
+    # ...but the other propositions about the SAME country are distinct events.
+    assert ev["WIN_GROUP"] != ev["WIN_CUP"]
+    assert ev["REACH_QF"] != ev["WIN_CUP"]
+    assert ev["UNBEATEN"] != ev["WIN_CUP"]
+    assert len({ev["WIN_GROUP"], ev["REACH_QF"], ev["UNBEATEN"]}) == 3
+
+
 def test_embedding_layer_is_fail_soft_without_optional_dependency(landed, capsys):
     # sentence-transformers is NOT a dev/CI dependency by design (see pyproject's
     # `embeddings` extra) — `use_embeddings=True` must degrade to a no-op, not crash.

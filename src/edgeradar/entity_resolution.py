@@ -434,6 +434,93 @@ def subject_tokens(title: str) -> frozenset[str] | None:
     return subj or None
 
 
+# A SAME subject (entity sub-block + subject guard) is not enough on its own: a
+# single country/candidate is often the subject of MANY genuinely different
+# propositions ("Argentina WIN THE CUP" vs "Argentina WIN THEIR GROUP" vs
+# "Argentina REACH THE QUARTERFINALS" vs "Argentina GO UNBEATEN") that all share
+# heavy boilerplate ("2026 FIFA World Cup"). Without a predicate check, one
+# country's whole family of Polymarket prop markets collapses into a single
+# false event — a real bug found on live World Cup prop-market data (hundreds of
+# distinct propositions all reduced to "is this about Argentina?"), see
+# FINDINGS.md. PREDICATE_SYNONYMS collapses a few obvious synonyms (beat==win)
+# so the guard doesn't over-fire on wording alone.
+PREDICATE_SYNONYMS: dict[str, str] = {
+    "beat": "win",
+    "beats": "win",
+    "defeat": "win",
+    "defeats": "win",
+    "wins": "win",
+    "advancing": "advance",
+    "advances": "advance",
+    "quarterfinals": "quarterfinal",
+    "semifinals": "semifinal",
+    "finals": "final",
+}
+PREDICATE_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "win",
+        "advance",
+        "reach",
+        "quarterfinal",
+        "semifinal",
+        "final",
+        "unbeaten",
+        "concede",
+        "finish",
+        "second",
+        "third",
+        "first",
+        "group",
+        "stage",
+        "score",
+        "scoring",
+        "goal",
+        "goals",
+        "assist",
+        "golden",
+        "ball",
+        "mvp",
+        "champion",
+        "championship",
+        "playoff",
+        "nominee",
+        "nomination",
+        "ballot",
+        "candidate",
+        "approval",
+        "confirm",
+        "confirmed",
+        "elect",
+        "elected",
+        "impeach",
+        "impeached",
+        # Macro/Fed markets: "cut" vs "hike" are OPPOSITE predictions (found
+        # merging on live data — "Fed rate cut by July" vs "Fed Rate Hike by
+        # July" sharing every other token), the most severe case worth a guard.
+        # Differentiating by WHICH meeting (month) is a known residual gap —
+        # month abbreviations vary by platform ("Jun" vs "June") and aren't
+        # normalized here; see FINDINGS.md.
+        "cut",
+        "hike",
+        "raise",
+        "lower",
+        "pause",
+        "hold",
+    }
+)
+
+
+def predicate_tokens(title: str) -> frozenset[str]:
+    """Distinguishing predicate keywords in a title (which PROPERTY/outcome is
+    being asked about), after folding a few obvious synonyms onto one token.
+
+    Empty when the title mentions none of these (e.g. weather — already
+    differentiated by numbers_in/entity sub-blocking, no extra constraint needed).
+    """
+    toks = {PREDICATE_SYNONYMS.get(t, t) for t in normalize_title(title).split()}
+    return frozenset(toks & PREDICATE_KEYWORDS)
+
+
 def guess_category(title: str) -> str:
     toks = set(normalize_title(title).split())
     for category, keywords in CATEGORY_KEYWORDS.items():
@@ -607,6 +694,7 @@ def load_latest_markets(*, data_root: str | None = None) -> pd.DataFrame:
     df["numbers"] = df["title"].map(numbers_in)
     df["subject"] = df["title"].map(subject_tokens)
     df["entities"] = df["title"].map(extract_entities)
+    df["predicate"] = df["title"].map(predicate_tokens)
     df["close_ts"] = pd.to_datetime(df["close_ts"], utc=True, errors="coerce")
     return df
 
@@ -694,9 +782,22 @@ def resolve(
         nums_ok = (not na) or (not nb) or (na == nb)
         # Opposite sides of the same game ("Celtics win" vs "Lakers win") have
         # near-identical titles but complementary probabilities — never merge them.
-        # Require the asserted winner (subject) to overlap.
+        # Require one subject to be a SUBSET of the other (covers exact equality,
+        # and an abbreviated mention like "Newsom" vs "Gavin Newsom"), not merely
+        # ANY shared token: a bare intersection check let "Will Messi have more
+        # G/A than Ronaldo?" merge with the unrelated "Will Messi win the Golden
+        # Ball?" (both subjects share "messi" but are otherwise disjoint) — a real
+        # over-merge bug found on live World Cup prop-market data, see FINDINGS.md.
         sa, sb = a["subject"], b["subject"]
-        subject_ok = (sa is None) or (sb is None) or bool(sa & sb)
+        subject_ok = (sa is None) or (sb is None) or sa <= sb or sb <= sa
+        # The SAME subject (e.g. one country) is routinely asked about in many
+        # genuinely different propositions ("win the cup" vs "win their group" vs
+        # "reach the quarterfinals" vs "go unbeaten") that share heavy boilerplate.
+        # Require the recognized predicate keywords to match exactly when both
+        # sides have any — see PREDICATE_KEYWORDS docstring for the live bug this
+        # fixes (FINDINGS.md).
+        pa, pb = a["predicate"], b["predicate"]
+        predicate_ok = (not pa) or (not pb) or pa == pb
         # A title with NEITHER a recognized entity NOR a capitalized subject is
         # maximally generic ("Will every team score a goal...?") and both the
         # entity sub-block and the subject guard are vacuous for it — it would
@@ -707,7 +808,7 @@ def resolve(
         # Demand near-exact similarity before letting a generic title match.
         generic = (not a["entities"] and sa is None) or (not b["entities"] and sb is None)
         required = GENERIC_MATCH_THRESHOLD if generic else threshold
-        return sim, bonus, confidence, nums_ok, subject_ok, required
+        return sim, bonus, confidence, nums_ok, subject_ok, predicate_ok, required
 
     overrides_applied = 0
     scored_pairs: set[tuple[tuple[str, str], tuple[str, str]]] = set()
@@ -721,11 +822,12 @@ def resolve(
                 ordered = tuple(sorted([ka, kb]))
                 scored_pairs.add(ordered)
 
-                sim, bonus, confidence, nums_ok, subject_ok, required = _score_pair(a, b)
-                method = "fuzzy"
-                decision = (
-                    "match" if (confidence >= required and nums_ok and subject_ok) else "no-match"
+                sim, bonus, confidence, nums_ok, subject_ok, predicate_ok, required = _score_pair(
+                    a, b
                 )
+                method = "fuzzy"
+                ok = confidence >= required and nums_ok and subject_ok and predicate_ok
+                decision = "match" if ok else "no-match"
 
                 if ordered in block_set:
                     decision, method, overrides_applied = (
@@ -769,7 +871,7 @@ def resolve(
         if ordered in scored_pairs or a_key not in rec_by_key or b_key not in rec_by_key:
             continue
         a, b = rec_by_key[a_key], rec_by_key[b_key]
-        sim, bonus, confidence, _, _, _ = _score_pair(a, b)
+        sim, bonus, confidence, _, _, _, _ = _score_pair(a, b)
         if relation == "block":
             decision, method = "manual-block", "manual"
         else:
@@ -804,8 +906,8 @@ def resolve(
                 continue
             scored_pairs.add(ordered)
             a, b = rec_by_key[a_key], rec_by_key[b_key]
-            sim, bonus, confidence, nums_ok, subject_ok, required = _score_pair(a, b)
-            ok = confidence >= required and nums_ok and subject_ok
+            sim, bonus, confidence, nums_ok, subject_ok, predicate_ok, required = _score_pair(a, b)
+            ok = confidence >= required and nums_ok and subject_ok and predicate_ok
             decision = "match" if ok else "no-match"
             if decision == "match":
                 uf.union(a_key, b_key)

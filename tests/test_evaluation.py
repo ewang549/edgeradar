@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pandas as pd
 import pytest
 
-from edgeradar.evaluation import _pnl_net, score_signals
+from edgeradar.evaluation import _pnl_net, _resolve_one, log_signals, score_signals
 
 
 def test_pnl_net_yes_win_and_loss():
@@ -154,3 +156,193 @@ def test_score_signals_no_resolutions_is_safe(tmp_path, monkeypatch):
     )
     assert summary.n_resolved == 0
     assert summary.hit_rate is None
+
+
+# --------------------------------------------------------------------------- #
+# Task 6: log_signals (reads mart_divergence/mart_weather_edge), auto-resolve
+# parsing, and a simulated multi-day signal_log -> score accumulation flow.
+# --------------------------------------------------------------------------- #
+
+
+def _write_divergence_mart(db_path: str, rows: list[dict]) -> None:
+    """Create a minimal mart_divergence table for log_signals() to read."""
+    import duckdb
+
+    df = pd.DataFrame(rows)  # noqa: F841 - duckdb.sql() looks this up by local variable name
+    con = duckdb.connect(db_path)
+    con.sql("create table mart_divergence as select * from df")
+    con.close()
+
+
+def test_log_signals_reads_mart_divergence_and_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    from edgeradar.config import get_settings
+
+    get_settings.cache_clear()
+    db_path = str(tmp_path / "wh.duckdb")
+    _write_divergence_mart(
+        db_path,
+        [
+            {
+                "event_id": "e1",
+                "market_id": "MKT1",
+                "source": "kalshi",
+                "title": "test market",
+                "is_signal": True,
+                "deviation": -0.10,  # < 0 -> implied YES side underpriced
+                "consensus": 0.60,
+                "implied_prob": 0.50,
+                "edge_net": 0.08,
+                "trade_cost": 0.02,
+                "snapshot_ts": datetime(2026, 6, 17, tzinfo=timezone.utc),
+            }
+        ],
+    )
+    log = log_signals(data_root=str(tmp_path), duckdb_path=db_path)
+    assert len(log) == 1
+    assert log.iloc[0]["side"] == "YES"
+    assert log.iloc[0]["predicted_prob_side"] == pytest.approx(0.60)
+    assert bool(log.iloc[0]["tradeable"]) is True
+
+    # Re-running against the SAME mart state must not double-count (idempotent
+    # on signal_key, derived from signal_type|market_id|signal_ts|side).
+    again = log_signals(data_root=str(tmp_path), duckdb_path=db_path)
+    assert len(again) == 1
+
+
+def test_multi_day_signal_accumulation_and_scoring(tmp_path, monkeypatch):
+    # Simulates the real forward-evaluation loop: day 1 logs one signal, day 2's
+    # ingest produces a second (new) signal alongside the first; signal_log
+    # accumulates both without duplicating day 1's. Both then resolve and score.
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    from edgeradar.config import get_settings
+
+    get_settings.cache_clear()
+
+    day1_db = str(tmp_path / "day1.duckdb")
+    _write_divergence_mart(
+        day1_db,
+        [
+            {
+                "event_id": "e1",
+                "market_id": "MKT1",
+                "source": "kalshi",
+                "title": "day-1 market",
+                "is_signal": True,
+                "deviation": -0.10,
+                "consensus": 0.60,
+                "implied_prob": 0.50,
+                "edge_net": 0.08,
+                "trade_cost": 0.02,
+                "snapshot_ts": datetime(2026, 6, 17, tzinfo=timezone.utc),
+            }
+        ],
+    )
+    log_day1 = log_signals(data_root=str(tmp_path), duckdb_path=day1_db)
+    assert len(log_day1) == 1
+
+    day2_db = str(tmp_path / "day2.duckdb")
+    _write_divergence_mart(
+        day2_db,
+        [
+            # Same signal as day 1 (must not duplicate)...
+            {
+                "event_id": "e1",
+                "market_id": "MKT1",
+                "source": "kalshi",
+                "title": "day-1 market",
+                "is_signal": True,
+                "deviation": -0.10,
+                "consensus": 0.60,
+                "implied_prob": 0.50,
+                "edge_net": 0.08,
+                "trade_cost": 0.02,
+                "snapshot_ts": datetime(2026, 6, 17, tzinfo=timezone.utc),
+            },
+            # ...plus a genuinely new one that only appeared on day 2.
+            {
+                "event_id": "e2",
+                "market_id": "MKT2",
+                "source": "kalshi",
+                "title": "day-2 market",
+                "is_signal": True,
+                "deviation": 0.15,  # > 0 -> NO side
+                "consensus": 0.30,
+                "implied_prob": 0.45,
+                "edge_net": 0.10,
+                "trade_cost": 0.01,
+                "snapshot_ts": datetime(2026, 6, 18, tzinfo=timezone.utc),
+            },
+        ],
+    )
+    log_day2 = log_signals(data_root=str(tmp_path), duckdb_path=day2_db)
+    assert len(log_day2) == 2  # accumulated, not duplicated
+
+    resolutions = tmp_path / "res.csv"
+    resolutions.write_text("market_id,outcome\nMKT1,1\nMKT2,0\n")
+    scored, summary = score_signals(data_root=str(tmp_path), resolutions_path=str(resolutions))
+    assert summary.n_resolved == 2
+    # MKT1: YES side, outcome YES -> hit. MKT2: NO side (deviation>0), outcome NO -> hit.
+    assert summary.hit_rate == 1.0
+    assert summary.pnl_net_total is not None
+    assert summary.calibration  # calibration buckets were produced
+
+
+def test_resolve_one_parses_kalshi_and_manifold_settlement(monkeypatch):
+    import httpx
+
+    class _Resp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, timeout=None):
+        if "kalshi" in url:
+            return _Resp(200, {"market": {"result": "yes", "status": "finalized"}})
+        return _Resp(200, {"isResolved": True, "resolution": "NO"})
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    outcome, detail = _resolve_one("kalshi", "ANY")
+    assert outcome == 1
+    assert "settled yes" in detail
+
+    outcome, detail = _resolve_one("manifold", "ANY")
+    assert outcome == 0
+    assert "resolved NO" in detail
+
+
+def test_resolve_one_handles_unresolved_and_errors(monkeypatch):
+    import httpx
+
+    class _Resp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_get_unresolved(url, timeout=None):
+        if "kalshi" in url:
+            return _Resp(200, {"market": {"result": "", "status": "active"}})
+        return _Resp(200, {"isResolved": False, "resolution": None})
+
+    monkeypatch.setattr(httpx, "get", fake_get_unresolved)
+    outcome, detail = _resolve_one("kalshi", "ANY")
+    assert outcome is None
+    assert "not settled" in detail
+    outcome, detail = _resolve_one("manifold", "ANY")
+    assert outcome is None
+    assert "not resolved" in detail
+
+    # Fail-soft on a network/HTTP error -- never raises, just reports "unresolved".
+    def fake_get_error(url, timeout=None):
+        raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr(httpx, "get", fake_get_error)
+    outcome, detail = _resolve_one("kalshi", "ANY")
+    assert outcome is None
+    assert "error" in detail
