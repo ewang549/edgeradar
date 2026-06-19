@@ -4,6 +4,10 @@ Manifold (https://manifold.markets) is a play-money prediction market with a
 simple, no-auth public API. We use it as a broad consensus signal.
 
 Endpoint: GET {base}/markets?limit=N  -> a JSON array of market objects.
+Targeted: GET {base}/search-markets?term=<keyword>&limit=N (one call per keyword,
+results merged/deduped) — lets ingestion emphasize categories that actually
+co-exist across platforms (see edgeradar.targeting) without fabricating markets;
+it only narrows which real markets get fetched.
 
 Price -> implied probability: for a BINARY market Manifold already exposes
 `probability` in (0,1), which IS the market-implied probability — no odds
@@ -31,9 +35,12 @@ class ManifoldAdapter(SourceAdapter):
 
     source = "manifold"
 
-    def __init__(self, *, limit: int = 200, **kwargs) -> None:
+    def __init__(self, *, limit: int = 200, keywords: list[str] | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.limit = limit
+        # When set, fetch targets these keywords via search-markets instead of the
+        # default firehose — see edgeradar.targeting.
+        self.keywords = keywords
 
     def fetch(self) -> Iterable[RawRecord]:
         snapshot_ts = DRY_RUN_TS if self.dry_run else self.now_utc()
@@ -41,6 +48,19 @@ class ManifoldAdapter(SourceAdapter):
             import json
 
             data = json.loads((self.sample_dir / "markets.json").read_text())
+        elif self.keywords:
+            settings = get_settings()
+            seen: dict[str, dict] = {}
+            for term in self.keywords:
+                resp = httpx.get(
+                    f"{settings.manifold_api_base}/search-markets",
+                    params={"term": term, "limit": self.limit},
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+                for m in resp.json():
+                    seen[m["id"]] = m
+            data = list(seen.values())
         else:
             settings = get_settings()
             resp = httpx.get(

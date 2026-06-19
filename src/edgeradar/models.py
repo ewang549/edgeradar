@@ -66,6 +66,14 @@ class MarketQuote(BaseModel):
     trade_cost: float | None = Field(
         default=None, description="Estimated cost to act (half-spread + fee) in probability units."
     )
+    price_is_stale: bool = Field(
+        default=False,
+        description=(
+            "True when implied_prob came from a fallback (e.g. a recent last-traded "
+            "price) rather than a live two-sided quote — never set silently; quality.py "
+            "and the dashboard surface this rate per source."
+        ),
+    )
 
     snapshot_ts: datetime = Field(
         description="UTC time WE fetched the quote (natural-key component)."

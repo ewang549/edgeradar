@@ -35,6 +35,7 @@ select
          then null else spread end                                as spread,
     case when trade_cost is null or isnan(trade_cost)
          then null else trade_cost end                            as trade_cost,
+    coalesce(price_is_stale, false)                                as price_is_stale,
     cast(snapshot_ts as timestamp)                                as snapshot_ts,
     cast(close_ts as timestamp)                                   as close_ts
 from raw

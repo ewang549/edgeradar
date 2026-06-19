@@ -7,6 +7,10 @@ it informs the cross-platform consensus but never counts toward tradeable PnL
 
 Endpoint: GET {base}/markets?closed=false&order=volume&ascending=false&limit=N
           -> a JSON array of market objects.
+Targeted: GET {base}/public-search?q=<keyword>&limit_per_type=N (one call per
+keyword; markets are nested under each result's `events[].markets[]`, merged
+and deduped by id) — see edgeradar.targeting. Only narrows which real markets
+get fetched; never fabricates one.
 
 Price -> implied probability: a binary market exposes `outcomes` ("[\"Yes\",\"No\"]")
 and `outcomePrices` ("[\"0.97\",\"0.03\"]"), where each share pays $1 if it occurs,
@@ -47,14 +51,32 @@ class PolymarketAdapter(SourceAdapter):
 
     source = "polymarket"
 
-    def __init__(self, *, limit: int = 200, **kwargs) -> None:
+    def __init__(self, *, limit: int = 200, keywords: list[str] | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.limit = limit
+        # When set, fetch targets these keywords via public-search instead of the
+        # default volume-sorted firehose — see edgeradar.targeting.
+        self.keywords = keywords
 
     def fetch(self) -> Iterable[RawRecord]:
         snapshot_ts = DRY_RUN_TS if self.dry_run else self.now_utc()
         if self.dry_run:
             data = json.loads((self.sample_dir / "markets.json").read_text())
+        elif self.keywords:
+            settings = get_settings()
+            seen: dict[str, dict] = {}
+            for term in self.keywords:
+                resp = httpx.get(
+                    f"{settings.polymarket_api_base}/public-search",
+                    params={"q": term, "limit_per_type": self.limit},
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+                for ev in resp.json().get("events", []):
+                    for m in ev.get("markets", []):
+                        if "id" in m:
+                            seen[m["id"]] = m
+            data = list(seen.values())
         else:
             settings = get_settings()
             resp = httpx.get(

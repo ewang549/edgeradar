@@ -50,15 +50,106 @@ def test_manifold_normalizes_binary_and_filters_rest():
 def test_kalshi_midpoint_and_filtering():
     adapter = KalshiAdapter(dry_run=True)
     quotes = adapter.run()
-    # 2 active (kept), 1 settled (filtered), 1 illiquid active (kept, implied=None).
+    # 2 liquid two-sided quotes + 1 stale-price fallback kept; settled, fully-dead
+    # illiquid, and the MVE combo basket are all dropped.
     assert len(quotes) == 3
     by_id = {q.market_id: q for q in quotes}
     # (0.45 + 0.48) / 2 = 0.465
     assert by_id["KXHIGHNY-26JUN17-B82.5"].implied_prob == pytest.approx(0.465)
+    assert by_id["KXHIGHNY-26JUN17-B82.5"].price_is_stale is False
     # (0.90 + 0.92) / 2 = 0.91
     assert by_id["KXNBAGAME-26JUN17BOSLAL-BOS"].implied_prob == pytest.approx(0.91)
-    # Illiquid market: mid == 0 -> implied_prob is None (not fabricated).
-    assert by_id["KXILLIQUID-26JUN17-EXAMPLE"].implied_prob is None
+    # Fully dead market (no quotes, no volume, no last price) -> dropped entirely.
+    assert "KXILLIQUID-26JUN17-EXAMPLE" not in by_id
+    # MVE combo basket -> dropped entirely, regardless of its (also-illiquid) quotes.
+    assert "KXMVESPORTSMULTIGAMEEXTENDED-S2026EXAMPLE-COMBO" not in by_id
+    # No live bid/ask but real volume + a recent trade -> kept, flagged as stale.
+    stale = by_id["KXSTALEFALLBACK-26JUN17-EXAMPLE"]
+    assert stale.implied_prob == pytest.approx(0.33)
+    assert stale.price_is_stale is True
+
+
+def test_kalshi_combo_market_helpers():
+    from edgeradar.adapters.kalshi import has_liquidity_signal, is_combo_market
+
+    combo = {
+        "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-X",
+        "mve_collection_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-R",
+        "mve_selected_legs": [{"market_ticker": "FOO-BAR", "side": "yes"}],
+        "market_type": "binary",  # combos report "binary" too -- not a reliable signal
+    }
+    normal = {"ticker": "KXHIGHNY-26JUN17-B82.5", "market_type": "binary"}
+    assert is_combo_market(combo) is True
+    assert is_combo_market(normal) is False
+    # ticker-prefix-only detection (no mve_* fields present) still catches it.
+    assert is_combo_market({"ticker": "KXMVECROSSCATEGORY-Z"}) is True
+
+    assert has_liquidity_signal({"liquidity_dollars": "5.00"}, min_dollars=1.0) is True
+    assert has_liquidity_signal({"volume_24h_fp": "0.00"}, min_dollars=1.0) is False
+
+
+def _fake_kalshi_market(ticker: str) -> dict:
+    return {
+        "ticker": ticker,
+        "market_type": "binary",
+        "status": "active",
+        "title": f"Fake market {ticker}",
+        "yes_bid_dollars": "0.40",
+        "yes_ask_dollars": "0.42",
+        "last_price_dollars": "0.41",
+        "liquidity_dollars": "100.0",
+    }
+
+
+def test_kalshi_pagination_follows_cursor_and_respects_max_pages(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append(dict(params))
+        page_cursor = params.get("cursor") or "p0"
+        next_cursor = {"p0": "p1", "p1": "p2"}.get(page_cursor, "")
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "cursor": next_cursor,
+                    "markets": [_fake_kalshi_market(f"KXFAKE-{page_cursor}")],
+                }
+
+        return _Resp()
+
+    monkeypatch.setattr("edgeradar.adapters.kalshi.httpx.get", fake_get)
+    adapter = KalshiAdapter(dry_run=False, max_pages=2)
+    quotes = adapter.run()
+    # max_pages=2 stops after 2 calls even though the server offered a 3rd cursor.
+    assert len(calls) == 2
+    assert len(quotes) == 2
+
+
+def test_kalshi_series_ticker_targeting(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append(dict(params))
+        series = params["series_ticker"]
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"cursor": "", "markets": [_fake_kalshi_market(f"KX-{series}-X")]}
+
+        return _Resp()
+
+    monkeypatch.setattr("edgeradar.adapters.kalshi.httpx.get", fake_get)
+    adapter = KalshiAdapter(dry_run=False, series_tickers=["KXMENWORLDCUP", "KXBTCD"])
+    quotes = adapter.run()
+    assert {c["series_ticker"] for c in calls} == {"KXMENWORLDCUP", "KXBTCD"}
+    assert len(quotes) == 2
 
 
 def test_dry_run_ingestion_lands_parquet(tmp_path, monkeypatch):

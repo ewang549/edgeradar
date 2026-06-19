@@ -59,12 +59,58 @@
       "ticker": "KXILLIQUID-26JUN17-EXAMPLE",
       "event_ticker": "KXILLIQUID-26JUN17",
       "market_type": "binary",
-      "title": "Illiquid market with no quotes (mid undefined -> implied_prob null, still recorded)",
+      "title": "Illiquid market: no quotes, no volume, no last price — dropped entirely",
       "status": "active",
       "yes_bid_dollars": "0.0000",
       "yes_ask_dollars": "0.0000",
       "last_price_dollars": "0.0000",
+      "liquidity_dollars": "0.0000",
+      "volume_24h_fp": "0.00",
+      "open_interest_fp": "0.00",
       "close_time": "2026-06-17T23:59:00Z",
+      "result": ""
+    },
+    {
+      "ticker": "KXSTALEFALLBACK-26JUN17-EXAMPLE",
+      "event_ticker": "KXSTALEFALLBACK-26JUN17",
+      "market_type": "binary",
+      "title": "Real but quote-less market: no live bid/ask, but recent trades exist",
+      "status": "active",
+      "yes_bid_dollars": "0.0000",
+      "yes_ask_dollars": "0.0000",
+      "last_price_dollars": "0.3300",
+      "liquidity_dollars": "0.0000",
+      "volume_24h_fp": "500.00",
+      "open_interest_fp": "1200.00",
+      "close_time": "2026-06-17T23:59:00Z",
+      "result": ""
+    },
+    {
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026EXAMPLE-COMBO",
+      "event_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026EXAMPLE",
+      "market_type": "binary",
+      "title": "yes Brazil,yes USA,yes Ecuador,yes Germany,yes Belgium",
+      "status": "active",
+      "mve_collection_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-R",
+      "mve_selected_legs": [
+        {
+          "event_ticker": "KXSOCCERGAME-26JUN17BRAARG",
+          "market_ticker": "KXSOCCERGAME-26JUN17BRAARG-BRA",
+          "side": "yes"
+        },
+        {
+          "event_ticker": "KXSOCCERGAME-26JUN17USAMEX",
+          "market_ticker": "KXSOCCERGAME-26JUN17USAMEX-USA",
+          "side": "yes"
+        }
+      ],
+      "yes_bid_dollars": "0.0000",
+      "yes_ask_dollars": "0.0000",
+      "last_price_dollars": "0.0000",
+      "liquidity_dollars": "0.0000",
+      "volume_24h_fp": "0.00",
+      "open_interest_fp": "0.00",
+      "close_time": "2026-06-22T23:59:00Z",
       "result": ""
     }
   ]

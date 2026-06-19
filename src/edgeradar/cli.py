@@ -43,9 +43,13 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     from edgeradar.ingest import run_ingest
 
     mode = "dry-run (offline, sample data)" if args.dry_run else "live"
-    print(f"[ingest] source={args.source!r} mode={mode}")
+    categories = (
+        [c.strip() for c in args.categories.split(",") if c.strip()] if args.categories else None
+    )
+    cat_msg = f" categories={categories}" if categories else ""
+    print(f"[ingest] source={args.source!r} mode={mode}{cat_msg}")
     try:
-        results = run_ingest(args.source, dry_run=args.dry_run)
+        results = run_ingest(args.source, dry_run=args.dry_run, categories=categories)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -348,6 +352,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest = sub.add_parser("ingest", help="Batch: fetch + land Parquet directly (Phase 1).")
     p_ingest.add_argument("--source", default="all", help="Source slug or 'all'.")
     p_ingest.add_argument("--dry-run", action="store_true", help="Use saved sample responses.")
+    from edgeradar.targeting import KNOWN_CATEGORIES
+
+    p_ingest.add_argument(
+        "--categories",
+        default=None,
+        help=(
+            "Comma-separated category names to focus ingestion on real markets likely "
+            "to overlap across platforms, e.g. 'world_cup,crypto,elections'. "
+            f"Known: {', '.join(KNOWN_CATEGORIES)}. Default pulls everything."
+        ),
+    )
     p_ingest.set_defaults(func=_cmd_ingest)
 
     p_produce = sub.add_parser("produce", help="Stream: publish raw quotes to the topic (Phase 3).")

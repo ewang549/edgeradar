@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     kalshi_api_base: str = Field(default="https://api.elections.kalshi.com/trade-api/v2")
     kalshi_api_key_id: str = Field(default="")  # set in .env when you wire Kalshi
     kalshi_private_key_path: str = Field(default="")
+    # Kalshi's /markets feed returns MVE combo/parlay baskets ahead of normal
+    # single-outcome markets (a live-data finding — see FINDINGS.md). Plain
+    # pagination is a poor way to find real markets since combos can outnumber
+    # them >100:1; `kalshi_max_pages` bounds how many pages a single "pull
+    # everything" fetch will turn before giving up, and targeted ingestion
+    # (config.CATEGORY_SERIES, --categories) is the practical way to find overlap.
+    kalshi_max_pages: int = Field(default=3)
+    # Markets with no usable bid/ask AND less than this in liquidity_dollars /
+    # volume_24h_fp / open_interest_fp are dropped entirely (too thin to trust).
+    kalshi_min_liquidity_dollars: float = Field(default=1.0)
 
     manifold_api_base: str = Field(default="https://api.manifold.markets/v0")
 

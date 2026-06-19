@@ -14,6 +14,7 @@ from edgeradar.adapters.manifold import ManifoldAdapter
 from edgeradar.adapters.oddsapi import OddsApiAdapter
 from edgeradar.adapters.polymarket import PolymarketAdapter
 from edgeradar.storage import write_quotes, write_raw
+from edgeradar.targeting import resolve_categories
 
 REGISTRY: dict[str, type[SourceAdapter]] = {
     "manifold": ManifoldAdapter,
@@ -34,12 +35,38 @@ class IngestResult:
     clean_path: str | None
 
 
-def run_ingest(source: str = "all", *, dry_run: bool = False) -> list[IngestResult]:
+def _build_adapter(slug: str, *, dry_run: bool, categories: list[str] | None) -> SourceAdapter:
+    """Construct a registered adapter, wiring category targeting where supported.
+
+    `categories=None` (the default) means "pull everything" — unchanged behavior.
+    Named categories (see edgeradar.targeting) narrow *which real markets* each
+    adapter asks its venue for; they never fabricate a market.
+    """
+    if not categories:
+        return REGISTRY[slug](dry_run=dry_run)
+    t = resolve_categories(categories)
+    if slug == "kalshi" and t.kalshi_series:
+        return KalshiAdapter(dry_run=dry_run, series_tickers=t.kalshi_series)
+    if slug == "manifold" and t.keywords:
+        return ManifoldAdapter(dry_run=dry_run, keywords=t.keywords)
+    if slug == "polymarket" and t.keywords:
+        return PolymarketAdapter(dry_run=dry_run, keywords=t.keywords)
+    if slug == "oddsapi" and t.oddsapi_sports:
+        return OddsApiAdapter(dry_run=dry_run, sports=",".join(t.oddsapi_sports))
+    return REGISTRY[slug](dry_run=dry_run)
+
+
+def run_ingest(
+    source: str = "all", *, dry_run: bool = False, categories: list[str] | None = None
+) -> list[IngestResult]:
     """Run one or all adapters; land raw payloads and normalized quotes.
 
     Args:
         source: a registered slug (e.g. "manifold") or "all".
         dry_run: if True, adapters read saved sample responses instead of the network.
+        categories: optional named categories (see edgeradar.targeting) to focus
+            ingestion on real markets likely to overlap across platforms (e.g.
+            ["world_cup", "crypto", "elections"]). Default (None) pulls everything.
     """
     if source == "all":
         slugs = list(REGISTRY)
@@ -50,7 +77,7 @@ def run_ingest(source: str = "all", *, dry_run: bool = False) -> list[IngestResu
 
     results: list[IngestResult] = []
     for slug in slugs:
-        adapter = REGISTRY[slug](dry_run=dry_run)
+        adapter = _build_adapter(slug, dry_run=dry_run, categories=categories)
         try:
             raw = list(adapter.fetch())
             quotes = list(adapter.normalize(raw))
