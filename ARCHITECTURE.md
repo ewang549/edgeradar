@@ -125,8 +125,13 @@ endpoints would never score high against each other directly. Concretely added:
   "beat"/"win"; it's now capitalization-based proper-noun extraction (works for
   any "Will X verb...?" template — candidates, countries, anyone), and tightened
   from "any shared token" to "one subject is a SUBSET of the other" (still allows
-  an abbreviated mention, but blocks "Messi vs Ronaldo" matching unrelated
-  "Messi wins the Golden Ball" on the shared token "messi" alone).
+  an abbreviated mention like "Newsom" vs "Gavin Newsom"). It deliberately only
+  extracts the LEADING proper-noun span — capturing every name in the title would
+  break the opposite-sides guard ("Celtics beat Lakers" vs "Lakers beat Celtics"
+  would get the identical subject set). The trade-off: a comparative title like
+  "Messi have more G/A than Ronaldo" still extracts only "Messi", which remains a
+  trivial subset of "Lionel Messi" — this exact pattern is a documented, still-open
+  residual gap, not a fixed case; see FINDINGS.md.
 - **Predicate guard**: the same subject (e.g. one country) is the subject of many
   genuinely different propositions ("win the cup" / "win their group" / "reach the
   quarterfinals" / "go unbeaten") sharing heavy boilerplate. A small predicate

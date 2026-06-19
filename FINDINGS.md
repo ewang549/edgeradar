@@ -194,10 +194,20 @@ can't crash the daily run.
    both sides have one. Net effect on the live dataset: max false-cluster size
    **304 → 5**, cross-platform `mart_divergence` rows **481 → 99** (most of the
    inflation was false matches comparing different propositions, not real
-   mispricings). **Residual, honestly unfixed:** macro markets differentiated only by
-   *which month's meeting* (not direction) can still merge — month abbreviations
-   vary by platform ("Jun" vs "June") and aren't normalized; the manual override
-   table is the documented escape valve for cases like this.
+   mispricings). **Residual, honestly unfixed — verified still present on live data
+   after all the fixes above:** the subset rule blocks the general disjoint-subject
+   case (most pairs), but a comparative title like "Messi have more G/A than
+   Ronaldo" still has only "Messi" as its extracted subject (the proper-noun
+   extractor deliberately captures only the *leading* span, the same choice that
+   correctly keeps "Celtics beat Lakers" from matching "Lakers beat Celtics" —
+   capturing every capitalized name in the title would break *that* guard instead).
+   "Messi" alone is trivially a subset of "Lionel Messi", so this specific
+   comparative-phrasing pattern still merges. Same root cause as the month-name gap
+   below: a real, narrower-than-the-headline-bug case the manual override table is
+   the documented escape valve for, not silently swept under the "it's fixed" rug.
+   Macro markets differentiated only by *which month's meeting* (not direction) have
+   the same kind of gap — month abbreviations vary by platform ("Jun" vs "June") and
+   aren't normalized.
 
 7. **Weather titles use symbols, not words, on live data.** The threshold parser only
    recognized word forms ("above 82.5F"); live Kalshi titles for most cities instead
