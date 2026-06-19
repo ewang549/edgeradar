@@ -40,3 +40,8 @@ dagster_home/
 .DS_Store
 .idea/
 .vscode/
+
+# Local AI/agent tooling — keep out of the repo
+.claude/
+CLAUDE.md
+PROMPT_fix_engine.md
