@@ -45,6 +45,19 @@ def test_parse_threshold():
     assert parse_threshold("yes Over 4.5 goals scored") is None
 
 
+def test_parse_threshold_symbol_form():
+    # Found on live data: Kalshi titles use symbols, not words, for many cities
+    # ("Will the high temp in NYC be >88° on Jun 19, 2026?").
+    assert parse_threshold("Will the high temp in NYC be >88° on Jun 19, 2026?") == ("above", 88.0)
+    assert parse_threshold("Will the high temp in Chicago be <74° on Jun 19, 2026?") == (
+        "below",
+        74.0,
+    )
+    # A band ("85-86°") is a different market type, not a single threshold —
+    # must NOT be approximated as one.
+    assert parse_threshold("Will the high temp in NYC be 85-86° on Jun 19, 2026?") is None
+
+
 def test_fit_sigma_mle_recovers_synthetic():
     # Generate deterministic outcomes from a known sigma and check we recover it.
     import random
@@ -85,3 +98,62 @@ def test_weather_edge_end_to_end(tmp_path, monkeypatch):
     assert row["forecast_prob"] == pytest.approx(0.81, abs=0.02)
     assert row["edge_net"] > 0
     assert bool(row["is_signal"]) is True
+
+
+def test_weather_covers_additional_kalshi_cities(tmp_path):
+    # Task 5: LOCATIONS was widened beyond NYC so more real Kalshi temperature
+    # markets get an NWS comparison. Chicago must now produce a real edge.
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from edgeradar.models import MarketQuote
+    from edgeradar.storage import write_quotes_grouped
+
+    ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    quotes = [
+        MarketQuote(
+            source="kalshi",
+            market_id="KXHIGHCHI-EXAMPLE",
+            outcome="YES",
+            title="Will the high temperature in Chicago be above 75F?",
+            price=Decimal("0.50"),
+            implied_prob=0.50,
+            fee_adj_prob=0.50,
+            snapshot_ts=ts,
+            close_ts=datetime(2026, 6, 19, tzinfo=timezone.utc),
+        )
+    ]
+    write_quotes_grouped(quotes, data_root=str(tmp_path))
+    df = build_weather_edge(data_root=str(tmp_path), dry_run=True)
+    assert not df.empty
+    row = df.iloc[0]
+    assert row["location"] == "CHICAGO"
+    # Forecast 78F vs threshold 75F -> a real, non-fabricated probability.
+    assert 0.0 < row["forecast_prob"] < 1.0
+
+
+def test_weather_does_not_fabricate_rows_for_unconfigured_cities(tmp_path):
+    # A city not in LOCATIONS (e.g. an international Polymarket-style city —
+    # genuinely no NWS overlap) must be skipped, never produce a fabricated row.
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from edgeradar.models import MarketQuote
+    from edgeradar.storage import write_quotes_grouped
+
+    ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    quotes = [
+        MarketQuote(
+            source="kalshi",
+            market_id="TOKYO-EXAMPLE",
+            outcome="YES",
+            title="Will the high temperature in Tokyo be above 30F?",
+            price=Decimal("0.50"),
+            implied_prob=0.50,
+            fee_adj_prob=0.50,
+            snapshot_ts=ts,
+        )
+    ]
+    write_quotes_grouped(quotes, data_root=str(tmp_path))
+    df = build_weather_edge(data_root=str(tmp_path), dry_run=True)
+    assert df.empty

@@ -32,6 +32,13 @@ from edgeradar.storage import read_quotes
 
 # Configured locations: NWS forecast endpoint + how to spot the city in a market
 # title + a day-ahead sigma (deg F). Add rows here to cover more cities.
+#
+# Widened from NYC-only to the Kalshi weather series found on live data
+# (KXHIGHCHI, KXHIGHDEN, KXHIGHMIA, ...) so more real Kalshi temperature markets
+# get an NWS-forecast comparison. NWS (api.weather.gov) only covers the US, so
+# this does NOT create overlap with Polymarket's international temperature
+# markets (Tokyo/Beijing/Cape Town/... — confirmed on live data, see
+# FINDINGS.md); that non-overlap is real and stays unfabricated.
 LOCATIONS: dict[str, dict] = {
     "NYC": {
         # NWS grid IDs aren't stable, so we store lat/lon and look up the correct
@@ -39,6 +46,56 @@ LOCATIONS: dict[str, dict] = {
         "lat": 40.7790,
         "lon": -73.9692,
         "city_tokens": ("nyc", "new york"),
+        "sigma": 4.0,
+    },
+    "CHICAGO": {"lat": 41.8781, "lon": -87.6298, "city_tokens": ("chicago",), "sigma": 4.0},
+    "DENVER": {"lat": 39.7392, "lon": -104.9903, "city_tokens": ("denver",), "sigma": 4.0},
+    "MIAMI": {"lat": 25.7617, "lon": -80.1918, "city_tokens": ("miami",), "sigma": 4.0},
+    "LOS_ANGELES": {
+        "lat": 34.0522,
+        "lon": -118.2437,
+        # "la" is safe here ONLY because `_match_location` uses word-boundary
+        # matching (not substring) — a naive substring check would also fire
+        # inside unrelated words like "Atlanta".
+        "city_tokens": ("los angeles", "la"),
+        "sigma": 4.0,
+    },
+    "PHOENIX": {"lat": 33.4484, "lon": -112.0740, "city_tokens": ("phoenix",), "sigma": 4.0},
+    "DALLAS": {"lat": 32.7767, "lon": -96.7970, "city_tokens": ("dallas",), "sigma": 4.0},
+    "SEATTLE": {"lat": 47.6062, "lon": -122.3321, "city_tokens": ("seattle",), "sigma": 4.0},
+    "ATLANTA": {"lat": 33.7490, "lon": -84.3880, "city_tokens": ("atlanta",), "sigma": 4.0},
+    "BOSTON": {"lat": 42.3601, "lon": -71.0589, "city_tokens": ("boston",), "sigma": 4.0},
+    "SAN_FRANCISCO": {
+        "lat": 37.7749,
+        "lon": -122.4194,
+        "city_tokens": ("san francisco",),
+        "sigma": 4.0,
+    },
+    "HOUSTON": {"lat": 29.7604, "lon": -95.3698, "city_tokens": ("houston",), "sigma": 4.0},
+    "PHILADELPHIA": {
+        "lat": 39.9526,
+        "lon": -75.1652,
+        "city_tokens": ("philadelphia",),
+        "sigma": 4.0,
+    },
+    "LAS_VEGAS": {"lat": 36.1699, "lon": -115.1398, "city_tokens": ("las vegas",), "sigma": 4.0},
+    "MINNEAPOLIS": {
+        "lat": 44.9778,
+        "lon": -93.2650,
+        "city_tokens": ("minneapolis",),
+        "sigma": 4.0,
+    },
+    "AUSTIN": {"lat": 30.2672, "lon": -97.7431, "city_tokens": ("austin",), "sigma": 4.0},
+    "NEW_ORLEANS": {
+        "lat": 29.9511,
+        "lon": -90.0715,
+        "city_tokens": ("new orleans",),
+        "sigma": 4.0,
+    },
+    "SAN_ANTONIO": {
+        "lat": 29.4241,
+        "lon": -98.4936,
+        "city_tokens": ("san antonio",),
         "sigma": 4.0,
     },
 }
@@ -51,6 +108,12 @@ _THRESHOLD_RE = re.compile(
     re.IGNORECASE,
 )
 _ABOVE_WORDS = {"above", "over", "greater than", "at least"}
+# Live Kalshi titles also use symbol form ("be >88° on...", "be <81° on...")
+# instead of words — found on live data, see FINDINGS.md. Titles expressing a
+# narrow band ("85-86°") are a genuinely different market type (not a single
+# threshold) and are deliberately left unparsed rather than approximated.
+_SYMBOL_THRESHOLD_RE = re.compile(r"(>=|≥|>|<=|≤|<)\s*(\d+(?:\.\d+)?)\s*°", re.IGNORECASE)
+_SYMBOL_ABOVE = {">", ">=", "≥"}
 # A second guard: the title must actually talk about temperature.
 _TEMP_KEYWORDS = ("temperature", "temp", "degrees", "°")
 
@@ -82,18 +145,29 @@ def prob_high_above(high_f: float, threshold: float, sigma: float) -> float:
 
 
 def parse_threshold(title: str) -> tuple[str, float] | None:
-    """Extract ('above'|'below', value) from a temperature market title, or None."""
+    """Extract ('above'|'below', value) from a temperature market title, or None.
+
+    Handles both word form ("above 82.5F") and symbol form (">88°", "<81°").
+    A band-style title ("85-86°") matches neither and correctly returns None —
+    that's a different market type, not a threshold to approximate.
+    """
     m = _THRESHOLD_RE.search(title)
-    if not m:
-        return None
-    direction = "above" if m.group(1).lower() in _ABOVE_WORDS else "below"
-    return direction, float(m.group(2))
+    if m:
+        direction = "above" if m.group(1).lower() in _ABOVE_WORDS else "below"
+        return direction, float(m.group(2))
+    m2 = _SYMBOL_THRESHOLD_RE.search(title)
+    if m2:
+        direction = "above" if m2.group(1) in _SYMBOL_ABOVE else "below"
+        return direction, float(m2.group(2))
+    return None
 
 
 def _match_location(title: str) -> str | None:
+    # Word-boundary matching (not naive substring) so a short token like "la"
+    # can't false-positive inside an unrelated word (e.g. "Atlanta" contains "la").
     t = title.lower()
     for loc, cfg in LOCATIONS.items():
-        if any(tok in t for tok in cfg["city_tokens"]):
+        if any(re.search(rf"\b{re.escape(tok)}\b", t) for tok in cfg["city_tokens"]):
             return loc
     return None
 

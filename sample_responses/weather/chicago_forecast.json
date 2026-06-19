@@ -1,0 +1,27 @@
+{
+  "properties": {
+    "updated": "2026-06-19T10:00:00+00:00",
+    "periods": [
+      {
+        "number": 1,
+        "name": "Today",
+        "startTime": "2026-06-19T06:00:00-05:00",
+        "endTime": "2026-06-19T18:00:00-05:00",
+        "isDaytime": true,
+        "temperature": 78,
+        "temperatureUnit": "F",
+        "shortForecast": "Sunny"
+      },
+      {
+        "number": 2,
+        "name": "Tonight",
+        "startTime": "2026-06-19T18:00:00-05:00",
+        "endTime": "2026-06-20T06:00:00-05:00",
+        "isDaytime": false,
+        "temperature": 60,
+        "temperatureUnit": "F",
+        "shortForecast": "Clear"
+      }
+    ]
+  }
+}
