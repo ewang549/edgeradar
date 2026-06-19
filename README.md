@@ -29,9 +29,12 @@ It is a complete, production-shaped data system rather than a single script:
 - **A partitioned Parquet lake → DuckDB warehouse → dbt** with staging/marts and
   data-quality tests, plus a DRY macro so all four source-staging models stay in
   lockstep.
-- **Entity resolution** that matches the *same event* across venues using
-  category blocking, fuzzy title+date scoring, numeric and subject guards, and a
-  human override table — the genuinely hard part.
+- **Entity resolution** that matches the *same event* across venues using alias
+  normalization (USA/United States, BTC/Bitcoin), category + entity sub-blocking,
+  fuzzy title+date scoring, numeric/subject/predicate guards, an optional
+  pluggable embedding-candidate layer, and a human override table — the genuinely
+  hard part. A persisted diagnostics report explains *why* when nothing matches
+  (e.g. "no category had ≥2 sources") instead of a bare empty state.
 - **An explainable analytics layer** that decomposes every apparent edge into
   raw → fee-adjusted → uncertainty-adjusted, attaches a confidence tier, and
   scores each source's reliability. No black-box ML; every label is a one-line
@@ -69,6 +72,15 @@ key; The Odds API needs a free key in `.env`):
 ```bash
 make refresh             # pull live data, rebuild warehouse, score, quality report
 make notify              # same, then post above-threshold signals to Discord
+```
+
+Kalshi's default `/markets` feed is dominated by illiquid MVE combo/parlay baskets
+(see [`FINDINGS.md`](FINDINGS.md)), so a "pull everything" live run finds few
+real, overlap-worthy markets. For a live run that actually surfaces cross-platform
+matches, target the categories known to co-exist across platforms:
+
+```bash
+edgeradar ingest --source all --categories world_cup,crypto,elections,macro,weather,sports_finals
 ```
 
 ## Architecture
@@ -171,7 +183,8 @@ favorite-longshot bias across 1,523 settled markets, Brier ≈ 0.067).
   per-signal edge breakdown ("raw 0.10 → after cost 0.07 ✅ → after uncertainty
   0.03 ✅").
 - **Resolution** — inspect how each cross-platform event was matched, with
-  near-miss pairs surfaced for review.
+  near-miss pairs surfaced for review; when nothing matched, a diagnostics panel
+  explains why in plain language instead of a bare empty state.
 - **Weather** — NWS forecast vs Kalshi temperature markets, with the model
   assumptions stated up front.
 - **Calibration** — Brier score, calibration curve, by-market-type breakdown, and
@@ -214,8 +227,10 @@ src/edgeradar/
 ├── normalize.py         # price → implied probability + vig removal
 ├── fees.py              # Kalshi fee + spread cost model
 ├── adapters/            # one SourceAdapter per venue (the key abstraction)
+├── targeting.py         # category -> series_ticker / keyword targeting for ingestion
 ├── streaming/           # producer / consumer / serde
 ├── entity_resolution.py # cross-platform event matching (blocking + fuzzy + overrides)
+├── resolution_diagnostics.py  # why markets did/didn't match (counts, near-miss scores)
 ├── analytics.py         # confidence, uncertainty, edge decomposition, reliability
 ├── quality.py           # data-quality / observability report
 ├── weather.py           # NWS forecast → probability + sigma calibration
@@ -235,7 +250,15 @@ sample_responses/        # committed fixtures for the offline demo
   built to prove that to you, not to deny it.
 - **Cross-platform comparability is imperfect.** Two venues' "same" market can have
   subtly different resolution criteria; entity resolution is fuzzy and supervised
-  by an override table, not perfect.
+  by an override table, not perfect. Concretely: macro markets differentiated only
+  by *which month's meeting* (not direction) can still merge, since month
+  abbreviations vary by platform ("Jun" vs "June") and aren't normalized — see
+  [`FINDINGS.md`](FINDINGS.md) for this and other matching edge cases found on
+  live data, and how big each fix's effect was.
+- **Real cross-platform overlap is genuinely thin in places.** Polymarket's weather
+  markets are international cities (Tokyo, Beijing, Cape Town, ...); Kalshi's are
+  US cities. That's real non-overlap, not a bug — the dashboard's Resolution page
+  says so explicitly rather than forcing a match.
 - **Live signal evaluation is forward-accumulating.** A handful of resolved signals
   proves nothing; trust calibration only at scale.
 - **The weather model is deliberately simple** (a calibrated Normal around the NWS
@@ -243,10 +266,10 @@ sample_responses/        # committed fixtures for the offline demo
 
 ## Roadmap
 
-Embedding-based candidate generation for entity resolution (with the override
-table as the confirmation store) · more venues behind the same adapter interface ·
-a Postgres warehouse target for dbt · longer-horizon live signal calibration ·
-richer per-source reliability weighting in the consensus.
+More venues behind the same adapter interface · a Postgres warehouse target for
+dbt · longer-horizon live signal calibration · richer per-source reliability
+weighting in the consensus · normalizing month-name abbreviations in the
+predicate guard (see Limitations above).
 
 ## What this demonstrates
 

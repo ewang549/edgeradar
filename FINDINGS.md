@@ -111,10 +111,11 @@ bias** (longshots are systematically too expensive), reproduced cleanly from liv
 ## Data-quality gotchas found on live data
 
 Running EdgeRadar against real APIs (rather than the tidy sample fixtures) surfaced
-four bugs that the demo data never would have. Each followed the same tell: a
-suspiciously large "edge" was a defect in our own pipeline, not free money. All four
-were fixed and now have regression tests; every external call was also made
-fail-soft so one bad input can't crash the daily run.
+bugs that the demo data never would have. Each followed the same tell: a
+suspiciously large "edge" — or a suspicious *lack* of any edge at all — was a defect
+in our own pipeline, not free money or genuine non-overlap. All were fixed and now
+have regression tests; every external call was also made fail-soft so one bad input
+can't crash the daily run.
 
 1. **Stale NWS grid id (404).** The weather module hardcoded an NWS gridpoint
    (`OKX/33,35`) that returned 404 on live data — those grid ids aren't stable.
@@ -132,12 +133,89 @@ fail-soft so one bad input can't crash the daily run.
    crashing the Parquet reader during concat. *Fix:* clamp out-of-range timestamps to
    "unknown" at ingestion, and coerce/clamp on read so existing bad files are tolerated.
 
-4. **Entity-resolution over-merging.** A ladder of near-identical titles ("Houston
-   96°F or higher", "97°F or higher", …) collapsed into one event because the titles
-   are ~95% similar, producing spurious cross-platform divergences across *different
-   thresholds*. *Fix:* require the set of numbers in two titles to match before a
-   fuzzy pair can group (manual overrides still win).
+4. **Entity-resolution over-merging on a number ladder.** A ladder of near-identical
+   titles ("Houston 96°F or higher", "97°F or higher", …) collapsed into one event
+   because the titles are ~95% similar, producing spurious cross-platform divergences
+   across *different thresholds*. *Fix:* require the set of numbers in two titles to
+   match before a fuzzy pair can group (manual overrides still win).
 
-The meta-lesson: demo data tests the happy path; live data tests your assumptions.
-The value of the evaluation layer and these guards is that the system fails *loudly
-in tests* and *softly in production*, rather than silently emitting garbage signals.
+5. **Kalshi's `/markets` feed is dominated by combo/parlay baskets — the headline bug
+   this project pass started from.** A plain `GET /markets?status=open&limit=200`
+   call returned **0 normal markets out of 200** — every single one was an MVE
+   ("Multi-Variable Event") combo/parlay basket like `KXMVESPORTSMULTIGAMEEXTENDED`,
+   bundling ~8 unrelated games into one illiquid product whose `title` is a
+   concatenated leg list ("yes Brazil, no Morocco wins by more than 2.5 goals, …").
+   Worse: these report `market_type: "binary"` identically to a normal single-outcome
+   market, so `market_type` cannot distinguish them — only `mve_collection_ticker` /
+   `mve_selected_legs` / the `KXMVE...` ticker prefix can. Paginating deeper doesn't
+   help: a systematic live scan found **~1 normal market per ~500 combo rows** in the
+   default feed order (115 normal markets out of 60,000 scanned). Kalshi's
+   `implied_prob` null rate was **90.5%**, reliability grade **F** (score 54.8/100).
+   *Fix:* exclude combo markets by the three signals above
+   (`adapters/kalshi.py::is_combo_market`); prefer Kalshi's server-side
+   `series_ticker` filter (confirmed live to exclude combos entirely) for targeted,
+   overlap-likely pulls (`edgeradar ingest --categories ...`, see `targeting.py`)
+   since blind pagination alone is impractical at this skew. Result: null rate
+   **90.5% → 0.0%**, grade **F → A** (score 100/100) on a live targeted pull.
+
+6. **Entity resolution over-merging via a "bridge" market (three related patterns,
+   all found by running resolution against the full live targeted dataset, not just
+   the tidy fixtures).** Fixing the Kalshi bug above suddenly produced thousands of
+   real, differently-worded markets to match — and exposed three structural
+   over-merge patterns that the original token-Jaccard + date-bonus scorer had no
+   defense against, because a *transitively clustered* false match doesn't need the
+   two endpoints to ever score high against each other directly — only against a
+   common "bridge."
+   - **Country-name boilerplate.** "Will Bosnia win Group F?" and "Will Argentina win
+     Group J?" share almost every token except the country name, so a generic,
+     subject-less Manifold market ("Will every team score a goal at the 2026 FIFA
+     World Cup?") matched *both* independently and transitively bridged them — 304
+     unrelated World Cup markets collapsed into one event.
+   - **Political-candidate templates.** "Will Dwayne 'The Rock' Johnson be the 2028
+     Democratic nominee?" vs. a different candidate's identically-templated question
+     — same failure shape, different domain.
+   - **Partial subject overlap.** "Will Messi have more G/A than Ronaldo?" matched the
+     unrelated "Will Messi win the Golden Ball?" because both subjects merely *share*
+     the token "messi", not because they're the same proposition.
+   - **Same subject, different proposition.** Even after fixing the above, one
+     country's *entire family* of distinct Polymarket props ("win the cup" / "win
+     their group" / "reach the quarterfinals" / "go unbeaten" / "concede the most
+     goals") still shared one subject and collapsed into one event — and separately,
+     "Fed rate **cut** by July" merged with "Fed Rate **Hike** by July" (opposite
+     predictions) for the same reason.
+   *Fixes* (`entity_resolution.py`): an alias map folding synonyms onto one canonical
+   token (USA/United States, BTC/Bitcoin, NYC/New York); sub-blocking by extracted
+   entity (country/city/ticker) so different entities are never even compared;
+   generalizing the win/lose-word subject guard into capitalization-based proper-noun
+   extraction, tightened to require one subject be a *subset* of the other (not
+   merely overlapping); a stricter near-exact-similarity bar for titles with neither a
+   recognized entity nor a subject; and a predicate-keyword guard (win/reach/group/
+   stage/unbeaten/concede/cut/hike/...) requiring exact predicate-set equality when
+   both sides have one. Net effect on the live dataset: max false-cluster size
+   **304 → 5**, cross-platform `mart_divergence` rows **481 → 99** (most of the
+   inflation was false matches comparing different propositions, not real
+   mispricings). **Residual, honestly unfixed:** macro markets differentiated only by
+   *which month's meeting* (not direction) can still merge — month abbreviations
+   vary by platform ("Jun" vs "June") and aren't normalized; the manual override
+   table is the documented escape valve for cases like this.
+
+7. **Weather titles use symbols, not words, on live data.** The threshold parser only
+   recognized word forms ("above 82.5F"); live Kalshi titles for most cities instead
+   use symbols ("Will the high temp in NYC be >88° on Jun 19?"). *Fix:* a second regex
+   for symbol form; band-style titles ("85-86°") are a genuinely different market type
+   and are deliberately left unparsed, not approximated. Also widened weather city
+   coverage from NYC-only to 18 US cities matching Kalshi's actual weather series —
+   note this does *not* create overlap with Polymarket's international temperature
+   markets (Tokyo/Beijing/Cape Town/...), confirmed live to be a real, current
+   non-overlap, not a bug.
+
+The meta-lesson: demo data tests the happy path; live data tests your assumptions —
+and at *scale*, live data tests structural assumptions (like "a pairwise guard is
+enough") that a small fixture is too small to ever violate. The value of the
+evaluation layer and these guards is that the system fails *loudly in tests* and
+*softly in production*, rather than silently emitting garbage signals. When
+resolution still comes back with zero cross-platform events, `resolve()` now persists
+a diagnostics report (`resolution_diagnostics.py`) explaining why in plain language
+(e.g. "kalshi only contributed markets in 'weather'; no other source covers them") —
+surfaced on the dashboard's Resolution page — so "no matches" is never an
+unexplained dead end again.

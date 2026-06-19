@@ -33,6 +33,19 @@ class, drop in a sample response for `--dry-run`, write one test. Nothing else i
 the system needs to change. This is the seam that keeps a multi-source ingestion
 system from turning into spaghetti.
 
+**Live-data gotcha (Kalshi).** A naive `fetch()` calling `/markets?status=open` got
+0 normal markets out of 200 — Kalshi's default feed order is dominated >100:1 by
+illiquid MVE combo/parlay baskets that report `market_type: "binary"` identically
+to a real market (see `FINDINGS.md`). `adapters/kalshi.py` excludes them by the
+real signal (`mve_collection_ticker` / `mve_selected_legs` / a `KXMVE...` ticker
+prefix), paginates with a configurable page cap, and — since blind pagination
+alone is impractical at that skew — supports `series_ticker`-targeted fetches
+wired from `targeting.py` (`edgeradar ingest --categories ...`) as the practical
+way to find real, overlap-worthy markets. When a quote falls back to a recent
+last-traded price instead of a live two-sided quote, it's carried through as
+`price_is_stale=True` end-to-end (model → lake → dbt → `quality.py`) — never
+silently.
+
 Each adapter also documents its **price → implied probability** formula, because
 every platform quotes differently:
 
@@ -93,6 +106,53 @@ fuzzy score; union-find clustering into `event_id`s. `make resolve` prints propo
 and near-threshold pairs for human review. The choice of std-lib-only matching (no
 heavyweight similarity dependency) keeps the logic transparent and auditable; the
 override table is the seam where an LLM matcher's confirmations would later land.
+
+**Hardened against live-scale data (Task 3 follow-up).** Running resolution against
+a few hand-written fixtures never exercises the failure mode that running it against
+~3,500 real, differently-worded markets does: a pairwise guard can be defeated by
+*transitive* clustering through a third "bridge" market, even when the two true
+endpoints would never score high against each other directly. Concretely added:
+
+- **Alias normalization** (`ALIASES`): folds known synonyms (USA/United States,
+  BTC/Bitcoin, NYC/New York) onto one canonical, underscore-joined token *before*
+  tokenizing, so `title_similarity` sees them as identical, not merely similar.
+- **Entity sub-blocking**: blocks by `(category, extracted_entity)`, not just
+  category, using the same canonical tokens as a small gazetteer. Different
+  countries/cities/tickers are never even compared — this is what stops a
+  templated "Will X win Group Y?" ladder for *different* X from fuzzy-matching on
+  shared boilerplate alone.
+- **Subject guard, generalized**: the old win/lose-word heuristic only fired on
+  "beat"/"win"; it's now capitalization-based proper-noun extraction (works for
+  any "Will X verb...?" template — candidates, countries, anyone), and tightened
+  from "any shared token" to "one subject is a SUBSET of the other" (still allows
+  an abbreviated mention, but blocks "Messi vs Ronaldo" matching unrelated
+  "Messi wins the Golden Ball" on the shared token "messi" alone).
+- **Predicate guard**: the same subject (e.g. one country) is the subject of many
+  genuinely different propositions ("win the cup" / "win their group" / "reach the
+  quarterfinals" / "go unbeaten") sharing heavy boilerplate. A small predicate
+  keyword set (win/reach/group/stage/unbeaten/concede/cut/hike/...) must match
+  exactly between two titles that both have one.
+- **Generic-title threshold**: a title with neither a recognized entity nor a
+  subject is maximally generic and would otherwise act as a promiscuous bridge;
+  it now needs near-exact similarity (0.92, vs the normal 0.60) to match anything.
+- **Optional embedding-candidate layer** (`embedding_candidate_pairs`, gated behind
+  `resolve(use_embeddings=True)` and the `edgeradar[embeddings]` extra): proposes
+  extra candidate pairs across blocks that share no tokens at all, for the SAME
+  guards above to confirm or reject. The std-lib matcher remains the default and
+  the only one CI exercises — this is the seam the original "LLM-assisted matcher"
+  idea above landed in.
+
+Net effect on live data: max false-cluster size 304 → 5; cross-platform
+`mart_divergence` rows 481 → 99 (the inflation was mostly false matches comparing
+different propositions). See `FINDINGS.md` for the full live-data writeup,
+including the one residual gap left undefended (month-name differentiation).
+
+**Resolution diagnostics.** `resolution_diagnostics.py` turns the same
+intermediate data `resolve()` already computes (per-market category/entity,
+scored candidate pairs) into a persisted report: counts per source per category,
+near-miss score distribution, and a plain-language explanation for *why* zero
+cross-platform events matched, when that happens — surfaced on the dashboard's
+Resolution page instead of a bare empty state.
 
 ## 5. Storage & warehouse choices
 
@@ -176,19 +236,29 @@ never drift because there is only one piece of logic to change.
 `quality.py` turns the lake into a health report (`data/quality/data_quality.parquet`,
 one row per source) using deliberately boring, high-value checks: freshness,
 volume, null rate, **duplicate rate** (a direct test of ingestion idempotency —
-the natural key should make it zero), probability-bounds violations, and a
-partial-ingest heuristic (latest snapshot vs the source's median volume). The
+the natural key should make it zero), probability-bounds violations, a
+partial-ingest heuristic (latest snapshot vs the source's median volume),
+**stale-price-fallback rate** (quotes whose `implied_prob` came from a flagged
+last-traded-price fallback rather than a live two-sided quote), and **combo-market
+exclusion rate** (the fraction of RAW Kalshi payloads dropped as MVE combo/parlay
+baskets before normalizing — the original live-data gotcha this report exists to
+catch). `_discover_sources` includes raw-only sources too, so a source whose
+*every* fetched record got excluded (0 clean quotes) still shows up as
+"100% combo-excluded, grade F" instead of silently vanishing from the report. The
 checks are pure functions over a DataFrame, unit-tested independently of the lake,
 and surfaced both in the dashboard's Source-health page and via `edgeradar
 quality`. `edgeradar doctor` complements this by diagnosing the *environment*
-(Python, deps, files, sample data, and the read-only guardrail) before a demo.
+(Python, deps, files, sample data, the read-only guardrail, current Kalshi
+ingestion knobs, and whether the optional embeddings extra is installed) before
+a demo.
 
 ## 12. Open questions / decisions to revisit
 
 - Consensus weighting: equal vs volume-weighted vs reliability-weighted (the
   reliability score in `analytics.py` is the natural input for the last option).
-- Embedding-based candidate generation for the fuzzy entity-resolution tier, with
-  the override table as the human confirmation store.
 - Whether to promote DuckDB → Postgres (the dbt models are written to make this a
   connection change).
 - Longer-horizon live signal calibration as logged signals accumulate resolutions.
+- Normalizing month-name abbreviations ("Jun" vs "June") in the entity-resolution
+  predicate guard — the one residual over-merge case found and left unfixed; see
+  `FINDINGS.md`.
