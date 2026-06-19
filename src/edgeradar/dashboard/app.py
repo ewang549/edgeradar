@@ -322,6 +322,27 @@ def page_resolution() -> None:
         )
     else:
         empty_state("No cross-platform events matched in the current data.")
+        diag = read_parquet(str(MARTS / "resolution_diagnostics.parquet"))
+        if not diag.empty:
+            st.warning("Why didn't anything match?")
+            for reason in str(diag.iloc[0]["reasons"]).split("; "):
+                st.markdown(f"- {reason}")
+            blocks = read_parquet(str(MARTS / "resolution_diagnostics_blocks.parquet"))
+            if not blocks.empty:
+                with st.expander("Markets per source per category (blocking breakdown)"):
+                    st.dataframe(
+                        blocks.sort_values(["category", "source"]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+            d = diag.iloc[0]
+            st.caption(
+                f"{int(d['n_pairs_scored'])} candidate pair(s) scored across "
+                f"{int(d['n_categories'])} categor{'y' if d['n_categories'] == 1 else 'ies'}; "
+                f"{int(d['n_near_miss'])} near-miss(es)"
+                + (f" (best confidence {d['near_miss_max']:.2f})" if d["near_miss_max"] else "")
+                + "."
+            )
 
     section("Near misses", "Pairs scored just under the match threshold — surfaced for review.")
     pairs = read_parquet(str(MARTS / "candidate_pairs.parquet"))

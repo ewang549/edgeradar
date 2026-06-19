@@ -99,6 +99,10 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
         f"({res.n_cross_platform} cross-platform; {res.overrides_applied} override(s) applied)"
     )
     print(f"  wrote {res.event_map_path}")
+    if res.n_cross_platform == 0 and res.diagnostics is not None:
+        print("\n  Why didn't anything match?")
+        for reason in res.diagnostics.reasons:
+            print(f"    - {reason}")
 
     if not res.candidate_pairs.empty:
         print("\n  Proposed/again-reviewable matches (highest confidence first):")

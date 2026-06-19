@@ -42,6 +42,11 @@ from pathlib import Path
 import pandas as pd
 
 from edgeradar.config import get_settings
+from edgeradar.resolution_diagnostics import (
+    ResolutionDiagnostics,
+    compute_resolution_diagnostics,
+    write_resolution_diagnostics,
+)
 from edgeradar.storage import read_quotes
 
 # Words that carry no matching signal; dropped before comparison.
@@ -571,6 +576,7 @@ class ResolveResult:
     n_cross_platform: int = 0
     overrides_applied: int = 0
     flagged_for_review: list[dict] = field(default_factory=list)
+    diagnostics: ResolutionDiagnostics | None = None
 
 
 def _load_override_pairs(path: str | Path) -> list[tuple[tuple[str, str], tuple[str, str], str]]:
@@ -629,7 +635,12 @@ def resolve(
 
     markets = load_latest_markets(data_root=root)
     if markets.empty:
-        return ResolveResult(event_map=pd.DataFrame(), candidate_pairs=pd.DataFrame())
+        diag = compute_resolution_diagnostics(markets, pd.DataFrame(), n_cross_platform=0)
+        if write:
+            write_resolution_diagnostics(diag, data_root=root)
+        return ResolveResult(
+            event_map=pd.DataFrame(), candidate_pairs=pd.DataFrame(), diagnostics=diag
+        )
 
     records = markets.to_dict("records")
     key = lambda r: (r["source"], r["market_id"])  # noqa: E731
@@ -872,6 +883,8 @@ def resolve(
         else []
     )
 
+    diag = compute_resolution_diagnostics(markets, candidate_pairs, n_cross_platform=n_cross)
+
     out_path = None
     if write:
         out_dir = Path(root) / "marts"
@@ -882,6 +895,7 @@ def resolve(
         # workbench can show accepted matches AND near-miss reviews without rerunning.
         if not candidate_pairs.empty:
             candidate_pairs.to_parquet(out_dir / "candidate_pairs.parquet", index=False)
+        write_resolution_diagnostics(diag, data_root=root)
 
     return ResolveResult(
         event_map=event_map,
@@ -891,4 +905,5 @@ def resolve(
         n_cross_platform=n_cross,
         overrides_applied=overrides_applied,
         flagged_for_review=flagged,
+        diagnostics=diag,
     )
